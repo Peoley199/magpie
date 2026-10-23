@@ -732,6 +732,28 @@ Nothing is disabled by default.
   `TestModelDisableCmd`, `TestDisabledModelsSetting`, and
   `internal/gui/tests/disabled-models.test.cjs`.
 
+## A ZCode Start Plan's system prompt
+
+ZCode's Start Plan (体验套餐) account is the one whose plugin sign-in keeps
+no GLM Coding Plan key (`zcodeStartPlan`: a moved `zcode` with
+`p.Key == ""`): the plugin sends it to `zcode.z.ai`, every other account of
+the plugin to `api.z.ai` or BigModel with its key. On 2026-10-23 that
+account answered 405 with code 3012 to every Messages request that
+carried a `system` — the plugin's three ZCode blocks, a bare string,
+before or in the middle of a conversation alike — and answered one with
+none, tools, thinking and a tool round included. The plugin sends the
+agent's system there since 0.1.21 (plugins #343), so every agent through
+such an account was turned away.
+
+Just before a request is sent, `forwardOnce` takes a Start Plan's system
+out (`withoutZCodeSystem` in
+[`anthropic_shapes.go`](../../internal/gateway/anthropic_shapes.go)): its
+text, a string's or its text blocks' in order, goes in front of the first
+user turn, so the model reads it all the same, and the message and turn
+counts stay as they were. A Coding Plan key's account and a team seat are
+sent as before. `TestZCodeStartPlanTakesNoSystem` and
+`TestWithoutZCodeSystem`.
+
 ## Model ids without the provider
 
 A client moved from another proxy (love1sbug on X, from CLIProxyAPI) keeps

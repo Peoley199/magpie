@@ -84,6 +84,8 @@ In [`decide.go`](../../internal/provider/decide.go) a plugin provider's decision
 
 A plugin's fetch runs in magpie's plugin host, so its `process.cwd()` is magpie's own folder, not the folder of the agent that asked. A plugin that tells its vendor the user's environment, as the ZCode plugin's Start Plan request does in its `# Environment` section, said magpie's `~/.config/magpie` as the working directory, and the model went looking there (magpie-community/plugins#86).
 
+The folder it says is the agent's, read from the agent's own request as a rule by folder reads it (`workPlace`, [gateway-routing](gateway-routing.md)): Claude Code's, Codex's, Pi's, OpenCode's and ZCode's, whose environment section (`- Primary working directory:`, its own `# Environment` or a later `<system-reminder>`) is the one written into the Start Plan's third system block. A tool's result says it too, so one in a conversation's later turns goes after the system prompt's. `TestWorkDirOfEachAgent` reads ZCode's own request (`testdata/workdir/zcode-3.16.3.json`).
+
 The gateway tells the plugin instead. On every request to a plugin's provider, `forwardOnce` calls `tellWorkPlace` ([`workdir.go`](../../internal/gateway/workdir.go)), which reads the request as sent to the plugin with the same `workPlace` that rules by folder use ([gateway-routing](gateway-routing.md)) and sets two headers on the plugin's fetch:
 
 | Header | Value |
