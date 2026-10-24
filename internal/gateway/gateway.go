@@ -4110,6 +4110,14 @@ func (s *Server) forwardOnce(ctx context.Context, p provider.Provider, to provid
 	if to == provider.Anthropic {
 		s.fitUserBetas(p, req.Header)
 	}
+	if to == provider.Anthropic && zcodeStartPlan(p) {
+		// ZCode's Start Plan takes no system prompt (anthropic_shapes.go),
+		// whichever path body came by: the plugin's three ZCode blocks too
+		body = withoutZCodeSystem(body)
+		req.Body = io.NopCloser(bytes.NewReader(body))
+		req.ContentLength = int64(len(body))
+		req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(body)), nil }
+	}
 	sent := len(body)
 	if p.Account != nil && p.Account.Agent == "codex" {
 		// a turn goes zstd-compressed, as Codex's own client sends it;

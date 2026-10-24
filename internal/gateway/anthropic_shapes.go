@@ -529,3 +529,85 @@ func withRefsSaid(body []byte) []byte {
 	}
 	return withFields(body, map[string]any{"messages": out})
 }
+
+// zcodeStartPlan is the ZCode provider a plugin serves, on an account whose
+// sign-in carries no GLM Coding Plan key: ZCode's Start Plan (体验套餐),
+// served at zcode.z.ai alone. The plugin asks the plan's list for a key
+// account, and sends an account with no key there.
+func zcodeStartPlan(p provider.Provider) bool {
+	return p.IsPlugin() && p.PluginProvider() == "zcode" && p.Key == ""
+}
+
+// withoutZCodeSystem is body as ZCode's Start Plan takes it: with none.
+// The plan turned away every request carrying a system prompt with a 405,
+// ZCode's own three blocks and a bare "hello" alike, while one with no
+// system went through (2026-10-23, a real Start Plan account). The plugin
+// sends the agent's system there since 0.1.21 (plugins #343), and a plan
+// account without a key has no other request to make: its system's text
+// goes in front of the agent's first turn, so the model reads it all the
+// same. A system message inside messages is left where it is.
+func withoutZCodeSystem(body []byte) []byte {
+	if !bytes.Contains(body, []byte(`"system"`)) {
+		return body
+	}
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.UseNumber()
+	var m map[string]any
+	if dec.Decode(&m) != nil {
+		return body
+	}
+	system, ok := m["system"]
+	if !ok {
+		return body
+	}
+	text := systemText(system)
+	msgs, _ := m["messages"].([]any)
+	first := -1
+	for i, raw := range msgs {
+		msg, _ := raw.(map[string]any)
+		if msg != nil && msg["role"] == "user" {
+			first = i
+			break
+		}
+	}
+	if text != "" && first >= 0 {
+		switch c := msgs[first].(map[string]any)["content"].(type) {
+		case string:
+			msgs[first].(map[string]any)["content"] = text + "\n\n" + c
+		case []any:
+			msgs[first].(map[string]any)["content"] = append([]any{map[string]any{"type": "text", "text": text}}, c...)
+		}
+	}
+	delete(m, "system")
+	var out bytes.Buffer
+	enc := json.NewEncoder(&out)
+	enc.SetEscapeHTML(false)
+	if enc.Encode(m) != nil {
+		return body
+	}
+	return bytes.TrimSuffix(out.Bytes(), []byte("\n"))
+}
+
+// systemText is a request's system as its text: a string, or its text
+// blocks' in order.
+func systemText(v any) string {
+	switch s := v.(type) {
+	case string:
+		if strings.TrimSpace(s) == "" {
+			return ""
+		}
+		return s
+	case []any:
+		var all []string
+		for _, x := range s {
+			b, _ := x.(map[string]any)
+			if b != nil && b["type"] == "text" {
+				if t, _ := b["text"].(string); strings.TrimSpace(t) != "" {
+					all = append(all, t)
+				}
+			}
+		}
+		return strings.Join(all, "\n\n")
+	}
+	return ""
+}

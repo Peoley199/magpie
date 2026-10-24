@@ -13,6 +13,9 @@ package gateway
 //   - Pi (1.1): the system prompt's "<cwd>\n/x\n</cwd>", backslashes as /.
 //   - OpenCode (2.0): "<env>\n  Working directory: /x\n…</env>", in the
 //     system prompt or, when it changes, a later message.
+//   - ZCode (3.16): its environment's "- Primary working directory: /x",
+//     in its system (an agent's own text joins its last block) or a later
+//     <system-reminder>.
 //
 // Of those it says, the last one goes: an agent that moved says so after.
 // An agent that says none of them has no folder: a rule by folder doesn't
@@ -30,6 +33,13 @@ import (
 
 var (
 	ccWorkDir = regexp.MustCompile(`(?m)^(?: - )?Primary working directory: (.+)$`)
+	// ZCode's, in its environment section with a leading dash that may
+	// begin a line rather than sit after the line's: the folder first, the
+	// rest of the line may be another field's
+	zcodeWorkDir = regexp.MustCompile(`(?m)\bPrimary working directory: (.+)$`)
+	// Claude Code's line and OpenCode's, whose folder is all that follows
+	// the label when it begins a line
+	dashWorkDir = regexp.MustCompile(`(?m)(?:^| )- Primary working directory: `)
 	// the folder a <cwd> holds: Codex's on its line, Pi's on its own
 	cwdTag = regexp.MustCompile(`<cwd>\s*([^<\n]+?)\s*</cwd>`)
 	envDir = regexp.MustCompile(`(?m)^\s*Working directory: (.+)$`)
@@ -60,8 +70,10 @@ func workPlace(req *Request) (dir, git string) {
 		if m.Role == "assistant" {
 			continue // the model's words, not the agent's
 		}
+		// the messages after a tool's call and result: a folder one of
+		// their later texts says comes after the system's
 		for _, p := range m.Parts {
-			if p.Kind == Text {
+			if p.Kind == Text || p.Kind == ToolResult {
 				look(p.Text)
 			}
 		}
@@ -107,6 +119,12 @@ func workDirIn(text, dir string) string {
 	}
 	for _, m := range ccWorkDir.FindAllStringSubmatchIndex(text, -1) {
 		take(m[0], wasDir.ReplaceAllString(text[m[2]:m[3]], ""))
+	}
+	for _, m := range zcodeWorkDir.FindAllStringSubmatchIndex(text, -1) {
+		if at := m[0]; dashWorkDir.MatchString(text[max(0, at-3):at]) {
+			continue // Claude Code's and OpenCode's, taken above
+		}
+		take(m[0], text[m[2]:m[3]])
 	}
 	for _, m := range cwdTag.FindAllStringSubmatchIndex(text, -1) {
 		take(m[0], text[m[2]:m[3]])
