@@ -37,9 +37,6 @@ var (
 	// begin a line rather than sit after the line's: the folder first, the
 	// rest of the line may be another field's
 	zcodeWorkDir = regexp.MustCompile(`(?m)\bPrimary working directory: (.+)$`)
-	// Claude Code's line and OpenCode's, whose folder is all that follows
-	// the label when it begins a line
-	dashWorkDir = regexp.MustCompile(`(?m)(?:^| )- Primary working directory: `)
 	// the folder a <cwd> holds: Codex's on its line, Pi's on its own
 	cwdTag = regexp.MustCompile(`<cwd>\s*([^<\n]+?)\s*</cwd>`)
 	envDir = regexp.MustCompile(`(?m)^\s*Working directory: (.+)$`)
@@ -121,8 +118,10 @@ func workDirIn(text, dir string) string {
 		take(m[0], wasDir.ReplaceAllString(text[m[2]:m[3]], ""))
 	}
 	for _, m := range zcodeWorkDir.FindAllStringSubmatchIndex(text, -1) {
-		if at := m[0]; dashWorkDir.MatchString(text[max(0, at-3):at]) {
-			continue // Claude Code's and OpenCode's, taken above
+		if at := m[0]; at >= 3 && text[at-3:at] == " - " && (at == 3 || text[at-4] == '\n') {
+			// Claude Code's and OpenCode's, " - " at a line's start: taken
+			// above, with its "(was …)" gone; ZCode's dash begins the line
+			continue
 		}
 		take(m[0], text[m[2]:m[3]])
 	}
