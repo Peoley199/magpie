@@ -87,4 +87,53 @@ func TestMaskingRecordsAPI(t *testing.T) {
 	if code := get("/api/masking/value?p="+url.QueryEscape("{{EMAIL_00000000}}"), nil); code != http.StatusNotFound {
 		t.Fatalf("a placeholder it never made: %d", code)
 	}
+
+	// the request as it went, and the values to read it as it came
+	body := `{"messages":[{"role":"user","content":"` + sent + `"}]}`
+	whole := maskrec.Add(maskrec.Record{What: "chat", N: 1, Sent: body,
+		Values: []maskrec.Value{{Placeholder: p, Kind: hits[0].Kind, By: hits[0].By, Len: hits[0].Len}}})
+	var got struct{ Body string }
+	if get("/api/masking/sent?key="+strconv.FormatInt(whole.Key, 10), &got); got.Body != body {
+		t.Fatalf("sent %q", got.Body)
+	}
+	if code := get("/api/masking/sent?key="+strconv.FormatInt(rec.Key, 10), nil); code != http.StatusNotFound {
+		t.Fatalf("a record kept without its body: %d", code)
+	}
+	rw := httptest.NewRecorder()
+	srv.ServeHTTP(rw, httptest.NewRequest("POST", "/api/masking/values", strings.NewReader(`{"ps":["`+p+`","{{EMAIL_00000000}}"]}`)))
+	var vs struct{ Values map[string]string }
+	if err := json.Unmarshal(rw.Body.Bytes(), &vs); err != nil || len(vs.Values) != 1 || vs.Values[p] != key || rw.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("values %d %s %v", rw.Code, rw.Body, rw.Header())
+	}
+}
+
+// Try it under Settings › Privacy shows what a request would send: with
+// Keep a key's form on, a made-up key of the same form, not a
+// placeholder.
+func TestMaskingPreviewKeepsKeyForm(t *testing.T) {
+	const key = "sk_w3axCByTQgK1PxqPhfKTrJOLBqz6sbZv"
+	h := t.TempDir()
+	t.Setenv("HOME", h)
+	t.Setenv("USERPROFILE", h)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(h, ".config"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(h, ".cache"))
+	srv := Handler(webHost{func() {}}, nil)
+	preview := func() string {
+		rw := httptest.NewRecorder()
+		srv.ServeHTTP(rw, httptest.NewRequest("POST", "/api/masking/preview", strings.NewReader(`{"text":"用密钥 `+key+` 部署可以吗，或用密钥 OPENAI_API_KEY=`+key+`"}`)))
+		var out struct{ Text string }
+		if err := json.Unmarshal(rw.Body.Bytes(), &out); err != nil {
+			t.Fatalf("%v %s", err, rw.Body)
+		}
+		return out.Text
+	}
+	for _, shape := range []bool{false, true} {
+		if err := settings.Save(settings.Settings{Redact: true, RedactShape: shape}); err != nil {
+			t.Fatal(err)
+		}
+		got := preview()
+		if strings.Contains(got, key) || strings.Contains(got, "{{") == shape || shape && (!strings.Contains(got, "=sk_") || !strings.Contains(got, "用密钥 sk_")) {
+			t.Errorf("keep form %v: %q", shape, got)
+		}
+	}
 }
