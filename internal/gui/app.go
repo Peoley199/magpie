@@ -22,6 +22,7 @@ import (
 	"github.com/yetone/magpie/internal/agent"
 	"github.com/yetone/magpie/internal/appdir"
 	"github.com/yetone/magpie/internal/autostart"
+	"github.com/yetone/magpie/internal/gateway"
 	"github.com/yetone/magpie/internal/library"
 	"github.com/yetone/magpie/internal/omarchy"
 	"github.com/yetone/magpie/internal/proc"
@@ -149,10 +150,10 @@ func (h *host) dock(s settings.Settings, shown bool) {
 	setDock(inDock(s, shown, full), shown)
 }
 
-// inDock: always, never, or while the window is shown, as s says, and while
-// it is full screen whatever s says (dockOnFullscreen).
+// inDock: always, never, or while the window is shown (the default), as s
+// says, and while it is full screen whatever s says (dockOnFullscreen).
 func inDock(s settings.Settings, shown, fullscreen bool) bool {
-	return s.Dock || s.DockWindow && shown || fullscreen
+	return s.Dock || !s.DockNever && shown || fullscreen
 }
 
 func (h *host) Quit() { h.app.Quit() }
@@ -353,8 +354,11 @@ func Run(version string, showMain bool, link string) error {
 	zoom := h.zoom()
 	go stats.Run(version, "app")
 	handler := devShell(h)
-	if handler == nil {
-		handler = Handler(h, startBackend())
+	ownPage := handler == nil
+	var gw *gateway.Server
+	if ownPage {
+		gw = startBackend()
+		handler = Handler(h, gw)
 	}
 	// Linux: the magpie before holds the app's D-Bus name until it quits,
 	// once it has finished its requests; this one serves the gateway
@@ -391,8 +395,18 @@ func Run(version string, showMain bool, link string) error {
 				return
 			}
 			if served.Load() != nil {
-				if err := agent.EndCodexFailover(); err != nil {
+				ended, err := agent.EndCodexFailover()
+				if err != nil {
 					log.Println("codex failover:", err)
+				}
+				// the threads Codex has open keep the gateway's address
+				// they began with: a relay serves them there on Codex's
+				// own sign-in once the gateway has let go (codexrelay;
+				// idkatbro on X: 503 "Unknown error" till magpie reopened)
+				if ended {
+					if err := agent.RelayOpenCodex(); err != nil {
+						log.Println("codex relay:", err)
+					}
 				}
 			}
 			// the compactions magpie made in Codex's threads written as
@@ -457,14 +471,7 @@ func Run(version string, showMain bool, link string) error {
 			}
 			return false
 		}
-		// with the gateway busy the first click waits for it to be idle,
-		// and the item then restarts at once (#577)
-		if waiting, _ := updates.waitingFor(); !waiting && !updates.idle() {
-			updates.waitIdle(now)
-			return
-		}
-		updates.cancelWait()
-		now()
+		updates.restartAsked(now)
 	})
 	quit := menu.Add(labels.quit).OnClick(func(*application.Context) { h.app.Quit() })
 	var ready string // the version waiting for a restart; on the main thread
@@ -626,6 +633,10 @@ func Run(version string, showMain bool, link string) error {
 	// GTK 3 with no font DPI set would lay every page out at a negative
 	// width (#1371); give it one before the first webview is made.
 	fontDPI()
+	// the page to a browser too, where Settings says (apppage.go)
+	if ownPage {
+		startAppPage(h, gw)
+	}
 	return h.app.Run()
 }
 

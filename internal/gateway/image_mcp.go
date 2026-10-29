@@ -42,6 +42,27 @@ const ImageMCPPath = "/mcp/magpie/image"
 // ImageMCPFiles is where the images it made are served from.
 const ImageMCPFiles = ImageMCPPath + "/files/"
 
+// Under these keys of a tool result's _meta the image server tells a
+// client that saves what it made (magpie tool) what its text tells an
+// agent: the id to wait on with generation_result, and each file made, at
+// its URL, and whether it is in the answer itself.
+const (
+	PendingMeta = "usemagpie.ai/pending"
+	FilesMeta   = "usemagpie.ai/files"
+)
+
+// MadeFile is one file a tool result's FilesMeta names.
+type MadeFile struct {
+	URL    string `json:"url"`
+	Inline bool   `json:"inline,omitempty"`
+}
+
+// withMeta is res with v under its _meta's key k.
+func withMeta(res map[string]any, k string, v any) map[string]any {
+	res["_meta"] = map[string]any{k: v}
+	return res
+}
+
 // The tools Magpie Image and the image MCP server have.
 const (
 	GenerateImageTool    = "generate_image"
@@ -104,27 +125,31 @@ const (
 
 const imageMCPFrom = "an http(s) URL or a data URL (data:image/png;base64,...); an absolute file path only for an agent on the computer magpie runs on"
 
-func imageMCPTools() []any {
-	ro := func(props map[string]any) map[string]any {
+// imageMCPTools are the server's tools as r's caller is given them: the
+// models each generate tool may be asked for are those its key may use.
+func imageMCPTools(r *http.Request) []any {
+	ro := func(props map[string]any, video bool) map[string]any {
+		_, shown, def := mediaModelsFor(r, video)
+		props["model"] = mediaModelProp(video, shown, def)
 		return map[string]any{"type": "object", "properties": props, "required": []string{"prompt"}}
 	}
 	return []any{
 		map[string]any{
 			"name":  GenerateImageTool,
 			"title": "Generate image",
-			"description": "Generate an image from a text prompt, or edit/combine images given as reference_images, with the image model set in Magpie (Settings → Images → Image generation). " +
+			"description": "Generate an image from a text prompt, or edit/combine images given as reference_images, with the image model set in Magpie (Settings → Images → Image generation) or the one model names. " +
 				"The image comes back in the answer and at a URL Magpie keeps it at for an hour (from another computer, download it with the same Authorization header this server is called with); nothing is saved in your project, so save it there yourself if you need it. " +
 				"When it is not ready within about 20 seconds, the answer is an id to wait on with " + GenerationResultTool + " instead. Write a detailed prompt: subject, style, composition, colours, any text to render exactly.",
-			"inputSchema": ro(ImageToolProps(imageMCPFrom + "s")),
+			"inputSchema": ro(ImageToolProps(imageMCPFrom+"s"), false),
 			"annotations": map[string]any{"readOnlyHint": false, "destructiveHint": false, "openWorldHint": true},
 		},
 		map[string]any{
 			"name":  GenerateVideoTool,
 			"title": "Generate video",
-			"description": "Generate a short video from a text prompt, optionally starting from an image to animate, with a video model set up in Magpie. It takes from ten seconds to a few minutes; " +
+			"description": "Generate a short video from a text prompt, optionally starting from an image to animate, with a video model set up in Magpie (the one model names, else the default). It takes from ten seconds to a few minutes; " +
 				"the answer is the URL to download the mp4 from (with the same Authorization header this server is called with), or, when it is not ready within about 20 seconds, an id to wait on with " + GenerationResultTool + ". " +
 				"Nothing is saved in your project. Describe the subject, the motion and the camera: what moves, how, and what the shot is.",
-			"inputSchema": ro(VideoToolProps(imageMCPFrom, imageMCPFrom+"s")),
+			"inputSchema": ro(VideoToolProps(imageMCPFrom, imageMCPFrom+"s"), true),
 			"annotations": map[string]any{"readOnlyHint": false, "destructiveHint": false, "openWorldHint": true},
 		},
 		map[string]any{
@@ -181,7 +206,21 @@ func (s *Server) imageMCPCall(r *http.Request, m mcpMessage) (any, map[string]an
 	case "ping":
 		return map[string]any{}, nil
 	case "tools/list":
-		return map[string]any{"tools": imageMCPTools()}, nil
+		return map[string]any{"tools": imageMCPTools(r)}, nil
+	case MediaModelMethod:
+		var p struct {
+			Tool  string `json:"tool"`
+			Model string `json:"model"`
+		}
+		json.Unmarshal(m.Params, &p)
+		if p.Tool != GenerateImageTool && p.Tool != GenerateVideoTool {
+			return nil, map[string]any{"code": -32602, "message": "no tool " + p.Tool + " takes a model"}
+		}
+		ref, err := mediaModelFor(r, p.Tool, p.Model)
+		if err != nil {
+			return nil, map[string]any{"code": -32602, "message": err.Error()}
+		}
+		return map[string]any{"model": ref}, nil
 	case "tools/call":
 		var p struct {
 			Name      string          `json:"name"`
@@ -224,6 +263,7 @@ func (s *Server) imageMCPDraw(r *http.Request, raw json.RawMessage) map[string]a
 	}
 	var a struct {
 		Prompt     string   `json:"prompt"`
+		Model      string   `json:"model"`
 		Size       string   `json:"size"`
 		N          int      `json:"n"`
 		References []string `json:"reference_images"`
@@ -237,6 +277,15 @@ func (s *Server) imageMCPDraw(r *http.Request, raw json.RawMessage) map[string]a
 		return toolResult(GenerateImageTool+" needs a prompt", true)
 	}
 	req := map[string]any{"prompt": a.Prompt, "n": max(1, min(a.N, maxDrawings)), "response_format": "b64_json"}
+	// a model named goes to the images API named, so a gateway key's
+	// models hold it there (#882)
+	if strings.TrimSpace(a.Model) != "" {
+		ref, err := mediaModelFor(r, GenerateImageTool, a.Model)
+		if err != nil {
+			return toolResult(err.Error(), true)
+		}
+		req["model"] = ref
+	}
 	for k, v := range map[string]string{"size": a.Size, "quality": a.Quality, "background": a.Background} {
 		if v != "" {
 			req[k] = v
@@ -303,6 +352,7 @@ func (s *Server) imageMCPDrawn(rec *replyRecorder, key, base string) map[string]
 	}
 	var content []any
 	var urls, lost, revised []string
+	var files []MadeFile
 	for i, d := range out.Data {
 		var img []byte
 		mt := d.Mime
@@ -332,9 +382,11 @@ func (s *Server) imageMCPDrawn(rec *replyRecorder, key, base string) map[string]
 			mt = "image/png"
 		}
 		urls = append(urls, base+ImageMCPFiles+s.imageMCPKeepFile(img, mt, key))
-		if len(img) <= imageMCPInline {
+		inline := len(img) <= imageMCPInline
+		if inline {
 			content = append(content, map[string]any{"type": "image", "data": base64.StdEncoding.EncodeToString(img), "mimeType": mt})
 		}
+		files = append(files, MadeFile{URL: urls[len(urls)-1], Inline: inline})
 		if d.Revised != "" {
 			revised = append(revised, d.Revised)
 		}
@@ -364,7 +416,7 @@ func (s *Server) imageMCPDrawn(rec *replyRecorder, key, base string) map[string]
 		fmt.Fprintf(&b, "The model said: %s\n", t)
 	}
 	content = append([]any{map[string]any{"type": "text", "text": b.String()}}, content...)
-	return map[string]any{"content": content, "isError": false}
+	return withMeta(map[string]any{"content": content, "isError": false}, FilesMeta, files)
 }
 
 // imageMCPFilm starts generate_video's video and answers with where to
@@ -376,6 +428,7 @@ func (s *Server) imageMCPFilm(r *http.Request, raw json.RawMessage) map[string]a
 	}
 	var a struct {
 		Prompt     string   `json:"prompt"`
+		Model      string   `json:"model"`
 		Seconds    any      `json:"seconds"`
 		Size       string   `json:"size"`
 		Image      string   `json:"image"`
@@ -388,6 +441,13 @@ func (s *Server) imageMCPFilm(r *http.Request, raw json.RawMessage) map[string]a
 		return toolResult(GenerateVideoTool+" needs a prompt", true)
 	}
 	req := map[string]any{"prompt": a.Prompt}
+	if strings.TrimSpace(a.Model) != "" {
+		ref, err := mediaModelFor(r, GenerateVideoTool, a.Model)
+		if err != nil {
+			return toolResult(err.Error(), true)
+		}
+		req["model"] = ref
+	}
 	switch v := a.Seconds.(type) {
 	case nil:
 	case float64:
@@ -476,7 +536,8 @@ func (s *Server) imageMCPVideo(r *http.Request, id string) map[string]any {
 			if v.Seconds != "" {
 				length = v.Seconds + "-second "
 			}
-			return toolResult(fmt.Sprintf("Generated a %svideo with %s. Download the mp4 from (with the same Authorization header as this server, from another computer):\n- %s/v1/videos/%s/content\n", length, v.Model, imageMCPBase(r), id), false)
+			at := imageMCPBase(r) + "/v1/videos/" + id + "/content"
+			return withMeta(toolResult(fmt.Sprintf("Generated a %svideo with %s. Download the mp4 from (with the same Authorization header as this server, from another computer):\n- %s\n", length, v.Model, at), false), FilesMeta, []MadeFile{{URL: at}})
 		case "failed":
 			msg := "it gave no reason"
 			if v.Error != nil && v.Error.Message != "" {
@@ -485,8 +546,8 @@ func (s *Server) imageMCPVideo(r *http.Request, id string) map[string]any {
 			return toolResult("the video failed: "+msg, true)
 		}
 		if !time.Now().Add(imageMCPPoll).Before(deadline) {
-			return toolResult(fmt.Sprintf("The video is still being made (%s, %d s so far; it can take a few minutes). It goes on without this call. "+
-				"Don't ask for it again: call %s with id %q to wait for it and get where to download it.\n", cmp.Or(v.Status, "queued"), int(time.Since(started)/time.Second), GenerationResultTool, id), false)
+			return withMeta(toolResult(fmt.Sprintf("The video is still being made (%s, %d s so far; it can take a few minutes). It goes on without this call. "+
+				"Don't ask for it again: call %s with id %q to wait for it and get where to download it.\n", cmp.Or(v.Status, "queued"), int(time.Since(started)/time.Second), GenerationResultTool, id), false), PendingMeta, id)
 		}
 		select {
 		case <-r.Context().Done():
@@ -553,8 +614,8 @@ func (s *Server) imageMCPAwait(r *http.Request, j *imageJob) map[string]any {
 	case <-limit.C:
 	case <-r.Context().Done():
 	}
-	return toolResult(fmt.Sprintf("The image is still being made (%d s so far; it can take a few minutes). It goes on without this call. "+
-		"Don't ask for it again: call %s with id %q to wait for it and get it.\n", int(time.Since(j.started)/time.Second), GenerationResultTool, j.id), false)
+	return withMeta(toolResult(fmt.Sprintf("The image is still being made (%d s so far; it can take a few minutes). It goes on without this call. "+
+		"Don't ask for it again: call %s with id %q to wait for it and get it.\n", int(time.Since(j.started)/time.Second), GenerationResultTool, j.id), false), PendingMeta, j.id)
 }
 
 // imageMCPKeepFile keeps img for an hour, for key, and is its file's name.

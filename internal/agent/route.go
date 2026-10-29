@@ -114,18 +114,6 @@ func listLabels(agent string) map[string]string {
 	return out
 }
 
-// viaMagpieFor is viaMagpie without the agent's own account: Codex CLI going
-// through magpie to its own ChatGPT login would only add a hop.
-func viaMagpieFor(agentID, prefix string) []Option {
-	var out []Option
-	for _, o := range viaMagpie(agentID, prefix) {
-		if !strings.HasPrefix(o.Value, prefix+agentID+"/") {
-			out = append(out, o)
-		}
-	}
-	return out
-}
-
 // isMagpie reports whether a model value is a catalog reference.
 func isMagpie(v string) bool {
 	if pid, _, ok := strings.Cut(v, "/"); ok && dryProviders[pid] {
@@ -225,8 +213,8 @@ func magpieModels(agent string) []catalog.Model {
 			yes := true
 			m.ImageInput = &yes
 		}
-		// APIs is the one to ask it on for the gateway to relay the request
-		// as it is. A group's members may each want another, so a group has
+		// APIs is the preferred client protocol, preserving the vendor's
+		// own content where possible. A group's members may differ, so a group has
 		// one only when every member is served best on Responses (#1594,
 		// ObsidianArch02): Pi, omp, droid and dsh then ask it there, and a
 		// GPT group's tool-call arguments stream as the member sends them
@@ -234,6 +222,16 @@ func magpieModels(agent string) []catalog.Model {
 		if e.Group == "" {
 			if n := e.Provider.Native(e.Model); n != "" {
 				m.APIs = []string{string(n)}
+			} else {
+				// Gemini clients also reach Code Assist and Google plugins
+				// through the gateway's Gemini API, with translation as needed.
+				apis := e.Provider.APIs(e.Model)
+				for _, pr := range e.Provider.Speaks() {
+					if (pr == provider.Gemini || pr == provider.CodeAssist) && (apis == nil || slices.Contains(apis, pr)) {
+						m.APIs = []string{string(provider.Gemini)}
+						break
+					}
+				}
 			}
 		} else if allResponses(members(e.ID)) {
 			m.APIs = []string{string(provider.Responses)}
@@ -242,6 +240,11 @@ func magpieModels(agent string) []catalog.Model {
 		// lists offer them: Fast in the Codex CLI magpie writes
 		// magpie-models.json for (#1530)
 		provider.CodexTiers(&m, e, members)
+		if agent == "codex" {
+			// the entry its vendor lists the model under in Codex's own
+			// shape, handed on as it is (codexcat)
+			m.Codex = e.Codex
+		}
 		// the gateway paths it goes on untranslated, as /v1/models says
 		// them: what an agent plugin's connect is told (cleary5779)
 		m.Endpoints = provider.NativeEndpoints(e)

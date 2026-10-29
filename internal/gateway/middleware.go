@@ -21,6 +21,10 @@ import (
 // magpie's to read.
 func (s *Server) serveAgent(w http.ResponseWriter, r *http.Request, from provider.Protocol, body []byte) {
 	withGatewaySession(w, r)
+	// a Responses request naming the response it follows is given the
+	// conversation whole before anything reads it (prev_response.go)
+	w, r, body, kept := previousResponse(w, r, from, body)
+	defer kept()
 	w, recorded := recordConversation(w, r, from, body)
 	defer recorded()
 	// a conversation going round one tool call is answered here, before
@@ -38,8 +42,12 @@ func (s *Server) serveAgent(w http.ResponseWriter, r *http.Request, from provide
 	info := gwmw.Info{Protocol: string(from), Model: modelOf(body), Stream: streamOf(body), Path: r.URL.Path, Agent: agentOf(r)}
 	var tried []gwmw.Tried
 	for _, a := range agents {
+		// the user's middleware runs before a route is begun: a wait
+		// magpie knows of (unrouted.go)
+		waited := noteWait(r.Context(), "JS middleware")
 		run := a.Begin(info)
 		if run == nil {
+			waited()
 			continue
 		}
 		defer run.End()
@@ -48,6 +56,7 @@ func (s *Server) serveAgent(w http.ResponseWriter, r *http.Request, from provide
 		}
 		var turned *gwmw.Reject
 		body, turned = run.Request(body)
+		waited()
 		if turned != nil {
 			writeError(w, from, turned.Status, turned.Message)
 			return
@@ -80,6 +89,20 @@ func triedOn(ctx context.Context, p provider.Provider, model string, body []byte
 	return body
 }
 
+// ownAsk is ctx for a request magpie asks of its own gateway while it
+// serves an agent's (a web search, an image's description): the agent's
+// middleware isn't run on it, as on magpie's other own requests. Its
+// runtimes are the agent request's, which one goroutine may use at a time
+// (moejs), and Run has no lock to hold callers to it, while these asks go
+// beside the request and each other: images described at once ran
+// onProvider on one runtime, and the gateway died of "concurrent map read
+// and map write" (#3695). Nor does the hooks' ctx describe them: a
+// description's body is Chat and a search's Anthropic, whatever
+// ctx.protocol names, and ctx.model and ctx.stream are the agent's.
+func ownAsk(ctx context.Context) context.Context {
+	return context.WithValue(ctx, triedKey{}, []gwmw.Tried(nil))
+}
+
 // middlewareWanted: plugins.json has a JS middleware on, so plugins/middleware
 // is in use.
 func middlewareWanted() bool { return middleware.On() > 0 }
@@ -98,7 +121,11 @@ func gatewayHooks(w http.ResponseWriter, r *http.Request, from provider.Protocol
 		info.Cwd = workDir(req)
 		info.Query = gatewayQuery(req)
 	}
+	// the plugin host, started for it if need be: a wait magpie knows of
+	// before a route is begun (unrouted.go)
+	waited := noteWait(r.Context(), "plugin hooks")
 	run := plugin.GatewayBegin(r.Context(), body, info)
+	waited()
 	if run == nil {
 		return w, body, func() {}
 	}

@@ -159,6 +159,14 @@ func (p Provider) ListedAPIs(model string) []Protocol {
 			return apis
 		}
 	}
+	// Vertex AI serves Gemini on generateContent, and its partner models
+	// (publisher/model) on chat completions alone
+	if p.IsVertex() {
+		if VertexPartner(model) {
+			return []Protocol{Chat}
+		}
+		return []Protocol{Gemini}
+	}
 	// Factory serves each model on the one API droid sends it on
 	if p.ID == "factory" && p.Account != nil {
 		return factoryAPIs(model)
@@ -193,7 +201,7 @@ func (p Provider) ListedAPIs(model string) []Protocol {
 // Sign authenticates a request to the provider, refreshing what needs it.
 // Plain providers get their key; accounts get the agent's tokens.
 func (p Provider) Sign(ctx context.Context, req *http.Request, proto Protocol, body []byte) error {
-	if p.Account != nil && settings.AccountDiscoveryOff() {
+	if p.Account != nil && settings.AccountDiscoveryOff() && !p.publicAccount() {
 		return errAccountDiscoveryOff
 	}
 	ctx = p.Via(ctx) // a sign-in refreshed on the way goes through its proxy
@@ -224,12 +232,20 @@ func (p Provider) Sign(ctx context.Context, req *http.Request, proto Protocol, b
 	// other case (PutUserHeader), so it is sent once, theirs.
 	// A list the request has its own of (anthropic-beta) is added to, not
 	// replaced: the user's betas go after those the agent asked.
-	for k, v := range p.Headers {
+	// ${sessionId} and ${threadId} in a value are the conversation's
+	// (conversation.go).
+	for k, v := range p.SentHeaders(ctx) {
 		if ListHeader(k) {
 			MergeList(req.Header, k, v)
 			continue
 		}
 		catalog.PutUserHeader(req.Header, k, v)
+	}
+	// a remote magpie is always sent its key as x-api-key, which no header
+	// of the user's replaces: their Authorization (a proxy's) goes on
+	// without taking the key away (remoteKey)
+	if p.IsRemoteMagpie() && p.Key != "" {
+		remoteKey(req.Header, p.Key)
 	}
 	return nil
 }
@@ -826,12 +842,13 @@ func claudeProvider(acct *Account) Provider {
 	// account runs Claude Code itself (the gateway's bridge, a test), so
 	// one that would go straight to the API with its sign-in is refused
 	acct.sign = func(context.Context, *http.Request, []byte) error { return errClaudeViaCLI }
-	acct.models = func() []catalog.Model { return catalog.Provider("anthropic") }
+	acct.models = claudeModels
 	acct.magpieList = true
-	// Claude's models are the ones magpie knows: listing them would ask
+	// Claude's models are the ones magpie knows and the ones Claude Code
+	// was told an account has (claude_models.go): listing them would ask
 	// Anthropic with the account's sign-in, which magpie never does
 	acct.fetch = func(context.Context) ([]catalog.Model, error) {
-		ms := catalog.Provider("anthropic")
+		ms := claudeModels()
 		return ms, catalog.SaveLive("claude", claudeBase, ms)
 	}
 	return Provider{ID: "claude", Name: "Claude Code", Icon: "claudecode-color", Anthropic: claudeBase,
@@ -857,7 +874,7 @@ func refreshFailed(status int, agent, msg string) error {
 // Accounts lists the signed-in agents as providers.
 func Accounts() []Provider {
 	if settings.AccountDiscoveryOff() {
-		return nil
+		return pluginAccounts() // the public plugins' alone (publicPlugin)
 	}
 	rememberLogins(false)
 	home, _ := os.UserHomeDir()
@@ -1043,6 +1060,31 @@ func codexAccount(home string) (Provider, bool) {
 // find.
 func codexToken(ctx context.Context, dir string) (tok, accountID string, err error) {
 	return codexTokenRenewing(ctx, dir, "")
+}
+
+// codexTokenAsKept is the access token Codex keeps in dir, as it is: an
+// expired one is an error, not refreshed, for a sign-in magpie leaves to
+// Codex (leftAlone), which renews it itself.
+func codexTokenAsKept(dir string) (tok, accountID string, err error) {
+	b, _, err := readCodexLogin(dir, false)
+	if err != nil {
+		return "", "", err
+	}
+	var a codexAuth
+	if json.Unmarshal(b, &a) != nil || a.Tokens.AccessToken == "" {
+		return "", "", errors.New("Codex is signed out; run codex login")
+	}
+	if exp, _ := jwtClaims(a.Tokens.AccessToken)["exp"].(float64); exp != 0 && !time.Now().Before(time.Unix(int64(exp), 0)) {
+		return "", "", errors.New("Codex's sign-in has expired; Codex renews it as it runs")
+	}
+	return a.Tokens.AccessToken, codexAccountID(a), nil
+}
+
+// CodexSignInAsKept is the access token and account id of the ChatGPT
+// sign-in Codex keeps, as it is (codexTokenAsKept): an expired one is an
+// error, left to Codex to renew.
+func CodexSignInAsKept() (tok, accountID string, err error) {
+	return codexTokenAsKept(codexHome())
 }
 
 // codexTokenRenewing is codexToken, and with stale, the access token the

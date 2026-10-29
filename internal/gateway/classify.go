@@ -81,13 +81,23 @@ var classified = struct {
 	// last: classifier model → why it couldn't say when last asked, an
 	// answer that wasn't one among them; gone once it answers
 	// (ClassifierFailure, #1929)
-	last     map[string]classifyFailure
+	last map[string]classifyFailure
+	// group: routing group id → why its classifier couldn't say when that
+	// group last asked it; gone once it answers that group
+	// (GroupClassifierFailure)
+	group    map[string]groupFailure
 	inflight map[string]*classifyCall
 }{
 	m:        map[string]classifiedAs{},
 	failed:   map[string]classifyFailure{},
 	last:     map[string]classifyFailure{},
+	group:    map[string]groupFailure{},
 	inflight: map[string]*classifyCall{},
+}
+
+type groupFailure struct {
+	classifyFailure
+	model string
 }
 
 type classifyCall struct {
@@ -172,6 +182,42 @@ func classify(ask classifier, model string, intents []string, prev before, effor
 		}
 	}
 	return v, false, nil
+}
+
+// classifiedFor notes what group's classifier, model, gave the group's
+// turn: err, or an answer. A failure is the one the classifier last had
+// (classified.last), resting from it or not, so the group's card says the
+// vendor's words and when they were said, not the rest's.
+func classifiedFor(group, model string, err error) {
+	classified.Lock()
+	defer classified.Unlock()
+	if err == nil {
+		delete(classified.group, group)
+		return
+	}
+	f, ok := classified.last[model]
+	if !ok {
+		f = classifyFailure{err: err.Error(), at: time.Now()}
+	}
+	classified.group[group] = groupFailure{classifyFailure: f, model: model}
+}
+
+// GroupClassifierFailure is why group's classifier, model, couldn't say
+// which intent or effort a turn of that group's was, the last time the
+// group asked it, and when; ok is false once it answers the group, before
+// the group asks it, and after the group's classifier changed. The Routing
+// page says it on that group's card alone: keyed by the classifier, a
+// group no request reached showed the failures of another group that
+// shares its classifier, as though its own turns were being judged (jjt on
+// Discord: "claude难易", not in use, said Claude Haiku's weekly limit).
+func GroupClassifierFailure(group, model string) (why string, at time.Time, ok bool) {
+	classified.Lock()
+	defer classified.Unlock()
+	f, ok := classified.group[group]
+	if !ok || f.model != model {
+		return "", time.Time{}, false
+	}
+	return f.err, f.at, true
 }
 
 // ClassifierFailure is why model, a routing group's classifier, couldn't
@@ -363,6 +409,16 @@ func classifyEffort(model string) string {
 // any other model through the gateway itself, as a client would: which of
 // intents the message is and, when effort, how hard the turn is, each in a
 // call of its own, at once.
+// askWaited is ask with each question a wait ctx's watch knows of
+// (noteWait): a routing group's decision model is asked before the
+// request's route is begun.
+func askWaited(ctx context.Context, ask classifier) classifier {
+	return func(model string, intents []string, prev before, effort bool, text string) (verdict, error) {
+		defer noteWait(ctx, "decision model")()
+		return ask(model, intents, prev, effort, text)
+	}
+}
+
 func (s *Server) askClassifier(model string, intents []string, prev before, effort bool, text string) (verdict, error) {
 	if p, m, ok := provider.Resolve(model); ok && p.DecidesModel(m) {
 		return s.askDecider(p, m, intents, prev, effort, text)
