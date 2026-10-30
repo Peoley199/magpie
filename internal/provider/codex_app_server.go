@@ -3,6 +3,7 @@ package provider
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"io/fs"
@@ -65,6 +66,11 @@ var (
 // whose app-server died leaves one open for good.
 const codexTurnWindow = 30 * time.Minute
 
+// codexTurnSlack is how much earlier than the app-servers' start a turn's
+// timestamp may be and still count as theirs: the two clocks are read by
+// different programs.
+const codexTurnSlack = 2 * time.Second
+
 // codexAppListWait bounds one listing of the app-servers and their homes:
 // at a load of 200 a 10s bound ran out on the owner's Mac (the change was
 // taken up at the next look, 9s later).
@@ -87,8 +93,26 @@ var (
 		return out, nil
 	}
 	endCodexAppServer = proc.End
-	codexTurnRunning  = func(home string, now time.Time) bool { return codexTurnOpen(home, now) }
+	codexTurnRunning  = func(home string, now, since time.Time) bool { return codexTurnOpen(home, now, since) }
+	codexServerStart  = proc.Started
 )
+
+// codexServersSince is when the oldest of the app-servers pids started: a
+// turn started before it can't be running in any of them. It is zero,
+// "unknown", when one's start can't be read, and every open turn counts.
+func codexServersSince(pids []int) time.Time {
+	var since time.Time
+	for _, p := range pids {
+		t, err := codexServerStart(p)
+		if err != nil || t.IsZero() {
+			return time.Time{}
+		}
+		if since.IsZero() || t.Before(since) {
+			since = t
+		}
+	}
+	return since
+}
 
 // isCodexAppOwnServer is whether a command line is the Codex app's own
 // app-server, which it talks to over stdio: one another program starts
@@ -271,7 +295,13 @@ func codexAppStep(ctx context.Context, now time.Time, busy func() (int, time.Tim
 	if inFlight, last := busy(); inFlight > 0 || now.Sub(last) < codexAppIdle {
 		return nil
 	}
-	if codexTurnRunning(home, now) {
+	c.Lock()
+	stale := make([]int, 0, len(c.stale))
+	for p := range c.stale {
+		stale = append(stale, p)
+	}
+	c.Unlock()
+	if codexTurnRunning(home, now, codexServersSince(stale)) {
 		return nil
 	}
 	var ended []int
@@ -298,8 +328,15 @@ func codexAppStep(ctx context.Context, now time.Time, busy func() (int, time.Tim
 // codexTurnOpen is whether a Codex session under home has a turn started
 // and not ended (task_started after its last task_complete or
 // turn_aborted) in a file written to within codexTurnWindow of now: the
-// app-server running it would cut it short.
-func codexTurnOpen(home string, now time.Time) bool {
+// app-server running it would cut it short. A turn started before since,
+// when the app-servers about to be ended started, ran in an app-server
+// gone since (force quit, crashed): a SIGKILLed one writes no
+// turn_aborted, and opening that thread again in the app writes
+// thread_settings_applied, so the file stays in the window as long as
+// the user looks at it. Counting it kept a switched account from ever
+// reaching the app (蛋仔 on Discord, 10-29 and 10-30: "点了会话再切换账号
+// 就重启不了"). A zero since counts every open turn.
+func codexTurnOpen(home string, now, since time.Time) bool {
 	open := false
 	_ = filepath.WalkDir(filepath.Join(home, "sessions"), func(path string, d fs.DirEntry, err error) error {
 		if err != nil || open {
@@ -315,7 +352,7 @@ func codexTurnOpen(home string, now time.Time) bool {
 		if err != nil || now.Sub(info.ModTime()) > codexTurnWindow {
 			return nil
 		}
-		open = sessionTurnOpen(path)
+		open = sessionTurnOpen(path, since)
 		return nil
 	})
 	return open
@@ -324,10 +361,11 @@ func codexTurnOpen(home string, now time.Time) bool {
 // sessionTurnTail is how much of a session file's end sessionTurnOpen reads.
 const sessionTurnTail = 512 << 10
 
-// sessionTurnOpen is whether the session file at path ends inside a turn.
-// A file that can't be read counts as open: a turn cut short costs more
-// than an app greyed a few seconds more.
-func sessionTurnOpen(path string) bool {
+// sessionTurnOpen is whether the session file at path ends inside a turn
+// started at since or later. A file that can't be read, or a turn whose
+// start can't be read, counts as open: a turn cut short costs more than
+// an app greyed a few seconds more.
+func sessionTurnOpen(path string, since time.Time) bool {
 	f, err := os.Open(path)
 	if err != nil {
 		return !errors.Is(err, fs.ErrNotExist)
@@ -344,7 +382,30 @@ func sessionTurnOpen(path string) bool {
 	}
 	started := bytes.LastIndex(b, []byte(`"type":"task_started"`))
 	ended := max(bytes.LastIndex(b, []byte(`"type":"task_complete"`)), bytes.LastIndex(b, []byte(`"type":"turn_aborted"`)))
-	return started > ended
+	if started <= ended {
+		return false
+	}
+	if since.IsZero() {
+		return true
+	}
+	at, ok := sessionLineTime(b, started)
+	return !ok || !at.Before(since.Add(-codexTurnSlack))
+}
+
+// sessionLineTime is the "timestamp" of the session file line holding
+// offset i of b, which Codex writes on every rollout line.
+func sessionLineTime(b []byte, i int) (time.Time, bool) {
+	line := b[bytes.LastIndexByte(b[:i], '\n')+1:]
+	if j := bytes.IndexByte(line, '\n'); j >= 0 {
+		line = line[:j]
+	}
+	var l struct {
+		Timestamp time.Time `json:"timestamp"`
+	}
+	if json.Unmarshal(line, &l) != nil || l.Timestamp.IsZero() {
+		return time.Time{}, false
+	}
+	return l.Timestamp, true
 }
 
 // codexAppGoneWait is how long RestartCodexApp waits for the app-servers
@@ -410,7 +471,8 @@ func RestartCodexAppWhenIdle(ctx context.Context, wait time.Duration) (ended int
 		return 0, false, err
 	}
 	until := time.Now().Add(wait)
-	for codexTurnRunning(home, time.Now()) {
+	since := codexServersSince(pids)
+	for codexTurnRunning(home, time.Now(), since) {
 		if time.Now().After(until) {
 			return 0, true, nil
 		}

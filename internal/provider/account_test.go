@@ -103,6 +103,10 @@ func isolate(t testing.TB) {
 	// a minute, and CachedCards hands them on whatever their age
 	forgetPlanQuotas()
 	ForgetBalances()
+	// nor when another test asked a saved account's list
+	codexSavedAsked.Lock()
+	codexSavedAsked.m = map[string]time.Time{}
+	codexSavedAsked.Unlock()
 	t.Cleanup(func() {
 		claudeKeychain, claudeBase, claudeExecutable = oldKeychain, oldBase, oldExe
 		DevinExecutable = oldDevin

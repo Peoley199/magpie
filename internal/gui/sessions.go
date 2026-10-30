@@ -9,7 +9,6 @@ import (
 	"os"
 	"runtime"
 	"runtime/debug"
-	"runtime/metrics"
 	"slices"
 	"strconv"
 	"strings"
@@ -104,7 +103,7 @@ func sessionRoutes(mux *http.ServeMux, w Windows) {
 			out.Dirs = append(out.Dirs, tilde(d))
 		}
 		list := sessions.List(sessions.All)
-		nativeKeys := map[string]bool{}
+		nativeKeys := make(map[string]bool, len(list))
 		for _, s := range list {
 			for _, k := range sessions.GatewayKeys(s) {
 				nativeKeys[k] = true
@@ -140,6 +139,9 @@ func sessionRoutes(mux *http.ServeMux, w Windows) {
 			}
 		}
 		vias := usage.Vias(since.Add(-time.Minute))
+		// made to size: up to sessions.All rows, grown by append each poll
+		// was copied through every size on the way, ~140 MB of eight (#2278)
+		out.Sessions = make([]sessionJSON, 0, len(list))
 		for _, s := range list {
 			j := sessionJSON{Session: s, Name: s.Agent, Icon: "generic", Via: viaOf(vias, s)}
 			if a := agents[s.Agent]; a != nil {
@@ -580,6 +582,9 @@ var warmOnce sync.Once
 
 func warmStart() {
 	go func() {
+		// a fresh install reads no agent's sessions until asked; one
+		// that read them before keeps reading them (decided once)
+		sessions.SettleReads()
 		time.Sleep(3 * time.Second)
 		// with few readers, as nobody waits on it yet: after an update
 		// that reads every file again, it held every core (#1665)
@@ -634,16 +639,14 @@ func warmUp(steps ...func()) {
 // still holds its rows, run under it: the warm-up as a whole did too for
 // ~11 s more CPU.
 //
-// It also holds the memory Go asks of the system to what it held when fn
-// began, as a soft limit (a lower one the user set is kept, and GOGC off
-// has none). A build of the request index after an update reads every
-// session again and allocates ~1.2 GB to keep ~40 MB more, and the heap
-// overshot its goal into pages it then kept: 308–323 MB in Activity
-// Monitor for 15.7k sessions, where a start that reads the index peaked at
-// 247–255 MB. Under the limit, 241–251 MB and 211–228 MB, for 1–7 s more
-// CPU in that build.
+// It sets no memory limit. It held the memory Go asked of the system to
+// what it held when fn began, and a cold start then reached the limit
+// with the heap all live: from ~11 s to ~24 s it collected every ~160 ms,
+// a core's worth, 3:39 of CPU in its first 60 s for 390k calls and 1166
+// collections. Without it, 2:03–2:06 and 618, and the footprint's peak
+// the same, 835–863 MB against 855 (#2278).
 func underTightGC(fn func()) {
-	defer tightenGC(true)()
+	defer tightenGC()()
 	fn()
 }
 
@@ -653,15 +656,12 @@ func underTightGC(fn func()) {
 // when the first to begin ended before the second.
 var tightGC struct {
 	sync.Mutex
-	n, limits int   // reads under it, and those of them limited
-	was       int   // GOGC before the first
-	limit     int64 // the memory limit before the first limited one
-	limited   bool  // whether that one set one
+	n   int // reads under it
+	was int // GOGC before the first
 }
 
-// tightenGC begins a read under a tight GC, with the memory limit too when
-// limit is set; undo ends it.
-func tightenGC(limit bool) (undo func()) {
+// tightenGC begins a read under a tight GC; undo ends it.
+func tightenGC() (undo func()) {
 	tightGC.Lock()
 	defer tightGC.Unlock()
 	if tightGC.n == 0 {
@@ -672,35 +672,13 @@ func tightenGC(limit bool) (undo func()) {
 		tightGC.was = was
 	}
 	tightGC.n++
-	if limit {
-		if tightGC.limits == 0 {
-			tightGC.limited = false
-			if held := heldMemory(); tightGC.was >= 0 && held < debug.SetMemoryLimit(-1) {
-				tightGC.limit, tightGC.limited = debug.SetMemoryLimit(held), true
-			}
-		}
-		tightGC.limits++
-	}
 	return sync.OnceFunc(func() {
 		tightGC.Lock()
 		defer tightGC.Unlock()
-		if limit {
-			if tightGC.limits--; tightGC.limits == 0 && tightGC.limited {
-				debug.SetMemoryLimit(tightGC.limit)
-			}
-		}
 		if tightGC.n--; tightGC.n == 0 {
 			debug.SetGCPercent(tightGC.was)
 		}
 	})
-}
-
-// heldMemory is what Go holds of the system's memory: all it mapped, less
-// the pages it gave back.
-func heldMemory() int64 {
-	s := []metrics.Sample{{Name: "/memory/classes/total:bytes"}, {Name: "/memory/classes/heap/released:bytes"}}
-	metrics.Read(s)
-	return int64(s[0].Value.Uint64() - s[1].Value.Uint64())
 }
 
 const tightGCPercent = 25

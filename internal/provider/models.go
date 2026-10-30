@@ -1504,8 +1504,9 @@ func (p Provider) ServesNone() bool { return p.NoModels && len(p.Models) == 0 }
 func (p Provider) waitsForPicks() bool { return len(p.Models) == 0 && len(p.Delisted) > 0 }
 
 // Exposed lists the models magpie offers to agents for this provider: the
-// user's picks; else the preset's; else everything, when that is few; none
-// after Select none (ServesNone).
+// user's picks; else the preset's; else everything, when that is few, the
+// newest of each family only under Best in family; none after Select none
+// (ServesNone).
 func (p Provider) Exposed() []catalog.Model {
 	if p.ServesNone() || p.waitsForPicks() {
 		return nil
@@ -1557,7 +1558,11 @@ func (p Provider) Exposed() []catalog.Model {
 	}
 	// a model listed on none of the APIs the provider has a URL for is
 	// left out before the first 24 are taken (#2094)
-	avail = slices.DeleteFunc(slices.Clone(avail), func(m catalog.Model) bool { return p.NoAPIFor(m.ID) })
+	avail = p.servable(avail)
+	// Best in family: the newest of each family the list has
+	if p.BestInFamily {
+		avail = catalog.BestInFamily(avail)
+	}
 	// another magpie's list is already the models its user exposed
 	if len(avail) <= manyModels || p.IsRemoteMagpie() {
 		return avail
@@ -1566,6 +1571,19 @@ func (p Provider) Exposed() []catalog.Model {
 	// vendor's own list — theirs run newest first — and let the user pick
 	// from the rest; nothing here is compiled in.
 	return avail[:manyModels]
+}
+
+// servable is avail less the models NoAPIFor leaves out.
+func (p Provider) servable(avail []catalog.Model) []catalog.Model {
+	return slices.DeleteFunc(slices.Clone(avail), func(m catalog.Model) bool { return p.NoAPIFor(m.ID) })
+}
+
+// NewestInFamily is the models Best in family would serve of avail, the
+// vendor's list (Available), before the first 24 are taken: the newest of
+// each family among those it can be asked for (catalog.BestInFamily),
+// whichever mode is on, so the editor can draw them before it is saved.
+func (p Provider) NewestInFamily(avail []catalog.Model) []catalog.Model {
+	return catalog.BestInFamily(p.servable(avail))
 }
 
 // NoAPIFor says the provider has a URL for none of the APIs the vendor's

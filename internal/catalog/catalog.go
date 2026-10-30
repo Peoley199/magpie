@@ -1189,6 +1189,16 @@ func NameOf(id string) string {
 	return n
 }
 
+// Spelling is the spelling models.dev gives a model most, of every bare
+// id it knows that is the same model (SameModel): glm-5.3-flash for
+// glm-5-3-flash, GLM-5.3-Flash or Ark's glm-5-3-flash-260828, as most of
+// its providers spell it (the normal index normalFor reads). Lowercase,
+// without a vendor's prefix; "" when it knows the model by no spelling.
+func Spelling(id string) string {
+	load()
+	return normal[SameModel(id)]
+}
+
 // Named gives a model the list names by its id alone the name models.dev
 // knows it by (NameOf), so one model reads the same under every provider:
 // a GLM Coding Plan's glm-5-turbo, which Zhipu's catalog doesn't list, is

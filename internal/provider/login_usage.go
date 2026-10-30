@@ -106,13 +106,47 @@ func LoginUsage(ctx context.Context, agent string) map[string]SubscriptionQuota 
 // each account's reading's state: when it was last read well, and
 // whether this try failed.
 func loginUsageAt(ctx context.Context, agent string) (map[string]SubscriptionQuota, time.Time, map[string]readState) {
+	return loginUsageOf(ctx, agent, nil)
+}
+
+// someLoginUsage is LoginUsage of the named accounts alone. What a
+// background look needs is the account the agent is on, and the others
+// only once that one is spent: reading every account at once, every few
+// minutes from one address, is a pattern no single official client makes
+// (owl on Discord, accounts held in magpie with no agent wired).
+func someLoginUsage(ctx context.Context, agent string, users ...string) map[string]SubscriptionQuota {
+	want := map[string]bool{}
+	for _, u := range users {
+		if u != "" {
+			want[strings.ToLower(u)] = true
+		}
+	}
+	if len(want) == 0 {
+		return map[string]SubscriptionQuota{}
+	}
+	out, _, _ := loginUsageOf(ctx, agent, want)
+	return out
+}
+
+// loginUsageOf is loginUsageAt over the accounts whose lower-cased user
+// is in only, or over every account when only is nil.
+func loginUsageOf(ctx context.Context, agent string, only map[string]bool) (map[string]SubscriptionQuota, time.Time, map[string]readState) {
 	// nor of a provider switched off or removed (leftAlone)
 	if settings.AccountDiscoveryOff() || leftAlone(agent) {
 		return nil, time.Time{}, nil
 	}
 	asked := time.Now()
 	states := map[string]readState{}
-	if out, ok := loginUsageStandIn(ctx, agent); ok {
+	if all, ok := loginUsageStandIn(ctx, agent); ok {
+		out := all
+		if only != nil {
+			out = map[string]SubscriptionQuota{} // the stand-in's map is its own
+			for user, q := range all {
+				if only[strings.ToLower(user)] {
+					out[user] = q
+				}
+			}
+		}
 		for user, q := range out {
 			states[user] = loginUsageEntry{at: asked, read: q}.state()
 		}
@@ -127,6 +161,9 @@ func loginUsageAt(ctx context.Context, agent string) (map[string]SubscriptionQuo
 	var wg sync.WaitGroup
 	oldest := asked
 	for _, l := range logins {
+		if only != nil && !only[strings.ToLower(l.User)] {
+			continue
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -453,8 +490,15 @@ func CodexUsedUp(ctx context.Context) bool {
 		return codexReadingHeld(codexHoldReading(ctx))
 	}
 	// read as LoginUsage has it, fetched at most once a minute: the agent
-	// package asks on every catalog sync
-	return codexReadingHeld(LoginUsage(ctx, "codex"))
+	// package asks on every catalog sync. Only the account Codex is
+	// signed in to counts (codexReadingHeld), so only it is read
+	var active []string
+	for _, l := range Logins("codex") {
+		if l.Active {
+			active = append(active, l.User)
+		}
+	}
+	return codexReadingHeld(someLoginUsage(ctx, "codex", active...))
 }
 
 // CodexHoldMatters is set by the agent package: whether Codex is wired to

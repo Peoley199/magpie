@@ -713,6 +713,17 @@ func autoGroups(entries []Entry, same map[string]string) []Group {
 				g.Name = own(e) // a vendor that names it, over one that only lists its id
 			}
 		}
+		// the name goes with the id agents are given (auto/<Spelled>): the
+		// one models.dev gives that spelling, else, where no vendor names
+		// it, that spelling itself, not the first provider's (XYenon on
+		// Discord: glm-5-3-flash beside auto/glm-5.3-flash). A group the
+		// user changed is stored with their name, never this one.
+		g.Spelled = spelledIn(g, same)
+		if n := catalog.NameOf(g.Spelled); g.Spelled != "" && n != "" {
+			g.Name = n
+		} else if g.Spelled != "" && g.Name == es[0].Model {
+			g.Name = g.Spelled
+		}
 		out = append(out, g)
 	}
 	return out

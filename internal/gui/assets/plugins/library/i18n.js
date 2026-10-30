@@ -2,6 +2,9 @@
 // kernel adds them to i18n.js's (magpie.strings).
 magpie.strings({
   zh: {
+    "This computer only": "只在这台电脑",
+    "Sync never carries it to your other computers": "同步不会把它带到你的其他电脑",
+    "Sync never carries it to your other computers, and a sync from them neither removes it nor puts theirs in its place": "同步不会把它带到你的其他电脑；其他电脑同步过来时，既不会删掉它，也不会用它们的同名服务器替换它",
     "Move into the library": "移入资源库",
     "Manage in magpie": "交给 magpie 管理",
     "Manage {n} in magpie": "将 {n} 个交给 magpie 管理",
@@ -725,6 +728,9 @@ magpie.strings({
     "{agents} can be changed once it runs.": "{agents} 要等它运行后才能修改。",
   },
   "zh-TW": {
+    "This computer only": "只在這台電腦",
+    "Sync never carries it to your other computers": "同步不會把它帶到你的其他電腦",
+    "Sync never carries it to your other computers, and a sync from them neither removes it nor puts theirs in its place": "同步不會把它帶到你的其他電腦；其他電腦同步過來時，既不會刪掉它，也不會用它們的同名伺服器取代它",
     "Move into the library": "移入資源庫",
     "Manage in magpie": "交給 magpie 管理",
     "Manage {n} in magpie": "將 {n} 個交給 magpie 管理",
@@ -1448,6 +1454,9 @@ magpie.strings({
     "{agents} can be changed once it runs.": "{agents} 要等它執行後才能修改。",
   },
   ja: {
+    "This computer only": "このコンピュータだけ",
+    "Sync never carries it to your other computers": "同期でほかのコンピュータには送られません",
+    "Sync never carries it to your other computers, and a sync from them neither removes it nor puts theirs in its place": "同期でほかのコンピュータには送られません。ほかのコンピュータからの同期で削除されたり、同じ名前のサーバーに置き換えられたりすることもありません",
     "Move into the library": "ライブラリへ移す",
     "Manage in magpie": "magpie で管理",
     "Manage {n} in magpie": "{n} 件を magpie で管理",
@@ -2171,6 +2180,9 @@ magpie.strings({
     "{agents} can be changed once it runs.": "{agents} は起動後に変更できます。",
   },
   de: {
+    "This computer only": "Nur dieser Computer",
+    "Sync never carries it to your other computers": "Die Synchronisierung bringt ihn nicht auf deine anderen Computer",
+    "Sync never carries it to your other computers, and a sync from them neither removes it nor puts theirs in its place": "Die Synchronisierung bringt ihn nicht auf deine anderen Computer, und eine Synchronisierung von dort entfernt ihn weder noch ersetzt sie ihn durch ihren gleichnamigen Server",
     "Move into the library": "In die Bibliothek verschieben",
     "Manage in magpie": "In magpie verwalten",
     "Manage {n} in magpie": "{n} in magpie verwalten",

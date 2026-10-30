@@ -185,6 +185,7 @@ func TestSettingsSaveKeepsWhatItDoesNotSend(t *testing.T) {
 		RedactModel:          true,
 		RedactModelName:      "astrlink-guard",
 		RedactModelScore:     map[string]float64{"astrlink-guard": 0.9},
+		RedactRouteTo:        "fake/m1",
 	}
 	was.RedactModelOff, was.RedactModelAuto = true, true
 	was.DesktopSubagentEffort = "high"
@@ -196,6 +197,12 @@ func TestSettingsSaveKeepsWhatItDoesNotSend(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := settings.SetGatewayConversations(true); err != nil {
+		t.Fatal(err)
+	}
+	// only SetSessionReads writes the agents whose sessions are read
+	if err := settings.SetSessionReads(func(*settings.SessionReads) *settings.SessionReads {
+		return &settings.SessionReads{Asked: true, Agents: map[string]bool{"claude": true, "codex": false}}
+	}); err != nil {
 		t.Fatal(err)
 	}
 	was = settings.Load()

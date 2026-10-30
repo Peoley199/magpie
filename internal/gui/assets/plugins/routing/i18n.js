@@ -2,6 +2,8 @@
 // kernel adds them to i18n.js's (magpie.strings).
 magpie.strings({
   zh: {
+    "Its plugin sent this request itself, so magpie can't split its time": "此请求由插件自行发出，magpie 无法拆分它的耗时",
+    "Claude Code sent this request itself, so magpie can't split its time": "此请求由 Claude Code 自行发出，magpie 无法拆分它的耗时",
     "magpie is masking this request before routing it (Settings › Privacy), so who takes it isn't picked yet.": "magpie 正在给这个请求脱敏（设置 › 隐私），脱敏完才路由，所以还没选出由谁处理。",
     "magpie hasn't routed this request yet, so who takes it isn't picked yet.": "magpie 还没开始路由这个请求，所以还没选出由谁处理。",
     "Nothing took this request: {error}": "没有谁处理这个请求：{error}",
@@ -32,6 +34,7 @@ magpie.strings({
     "“· routing group” is set for every group above": "是否带「· routing group」在上方统一设置，对所有路由组生效",
     "{agent} guessed your next message for its composer by itself, reading the whole conversation again. Not a turn of the conversation; Codex composer predictions, under Settings in Codex's row on the Agents page, picks its model, and Codex's Settings › General › Show predictions turns it off.": "{agent} 自行为输入框猜测你的下一条消息，每次都把整段对话重读一遍。不属于对话轮次；在 Agent 页 Codex 那一行的设置里，用 Codex 输入框预测 选它用的模型，在 Codex 的 设置 › 常规 › 显示预测内容 里可以关掉。",
     "{name} is switched off: the group skips it until it is on again": "{name} 已关闭：开启前这个组会跳过它",
+    "{n} switched off": "{n} 个已关闭",
     "Off: agents aren't offered {name} and a request to it is turned away. Click to switch it on": "已关闭：Agent 列表里没有 {name}，发给它的请求会被拒绝。点击打开",
     "On: agents may pick {name}. Click to switch it off and keep it as it is": "已打开：Agent 可以选用 {name}。点击暂时关闭，组的设置原样保留",
     "{name} switched on": "已打开 {name}",
@@ -592,6 +595,8 @@ magpie.strings({
     "Open Folder": "打开文件夹",
   },
   "zh-TW": {
+    "Its plugin sent this request itself, so magpie can't split its time": "此請求由外掛自行發出，magpie 無法拆分它的耗時",
+    "Claude Code sent this request itself, so magpie can't split its time": "此請求由 Claude Code 自行發出，magpie 無法拆分它的耗時",
     "magpie is masking this request before routing it (Settings › Privacy), so who takes it isn't picked yet.": "magpie 正在為這個請求脫敏（設定 › 隱私），脫敏完才路由，所以還沒選出由誰處理。",
     "magpie hasn't routed this request yet, so who takes it isn't picked yet.": "magpie 還沒開始路由這個請求，所以還沒選出由誰處理。",
     "Nothing took this request: {error}": "沒有誰處理這個請求：{error}",
@@ -632,6 +637,7 @@ magpie.strings({
     "Whether “· routing group” follows a group’s name in the agents’ lists: one setting for every group, and for the provider after each model’s name, as on Settings.": "Agent 的模型列表裡，路由組名後面是否帶「· routing group」。這是所有路由組共用的一個設定，也決定模型名後面是否帶供應商，和「設定」裡的是同一個。",
     "“· routing group” is set for every group above": "是否帶「· routing group」在上方統一設定，對所有路由組生效",
     "{name} is switched off: the group skips it until it is on again": "{name} 已關閉：開啟前這個組會跳過它",
+    "{n} switched off": "{n} 個已關閉",
     "Off: agents aren't offered {name} and a request to it is turned away. Click to switch it on": "已關閉：Agent 列表裡沒有 {name}，發給它的請求會被拒絕。點選開啟",
     "On: agents may pick {name}. Click to switch it off and keep it as it is": "已開啟：Agent 可以選用 {name}。點選暫時關閉，組的設定原樣保留",
     "{name} switched on": "已開啟 {name}",
@@ -1182,6 +1188,8 @@ magpie.strings({
     "Open Folder": "打開資料夾",
   },
   ja: {
+    "Its plugin sent this request itself, so magpie can't split its time": "このリクエストはプラグインが自ら送信したため、magpie では時間の内訳を出せません",
+    "Claude Code sent this request itself, so magpie can't split its time": "このリクエストは Claude Code が自ら送信したため、magpie では時間の内訳を出せません",
     "magpie is masking this request before routing it (Settings › Privacy), so who takes it isn't picked yet.": "magpie はルーティングの前にこのリクエストをマスクしています（設定 › プライバシー）。誰が処理するかはまだ決まっていません。",
     "magpie hasn't routed this request yet, so who takes it isn't picked yet.": "magpie はまだこのリクエストをルーティングしていないため、誰が処理するかはまだ決まっていません。",
     "Nothing took this request: {error}": "このリクエストを処理したものはありません: {error}",
@@ -1210,6 +1218,7 @@ magpie.strings({
     "“· routing group” is set for every group above": "「· routing group」を付けるかは上で全グループ共通に設定します",
     "{agent} guessed your next message for its composer by itself, reading the whole conversation again. Not a turn of the conversation; Codex composer predictions, under Settings in Codex's row on the Agents page, picks its model, and Codex's Settings › General › Show predictions turns it off.": "{agent} が入力欄に表示する次のメッセージの予測を自分で行い、そのたびに会話全体を読み直しました。会話のターンではありません。エージェントページの Codex の行にある設定の Codex の入力予測 でモデルを選べ、Codex の 設定 › 一般 › 予測候補を表示 でオフにできます。",
     "{name} is switched off: the group skips it until it is on again": "{name} はオフです。オンに戻すまでグループはスキップします",
+    "{n} switched off": "{n} 件オフ",
     "Off: agents aren't offered {name} and a request to it is turned away. Click to switch it on": "オフ：{name} はエージェントに表示されず、届いたリクエストは断られます。クリックでオン",
     "On: agents may pick {name}. Click to switch it off and keep it as it is": "オン：エージェントは {name} を選べます。クリックで一時的にオフ（設定はそのまま）",
     "{name} switched on": "{name} をオンにしました",
@@ -1772,6 +1781,8 @@ magpie.strings({
     "Open Folder": "フォルダを開く",
   },
   de: {
+    "Its plugin sent this request itself, so magpie can't split its time": "Diese Anfrage hat die Erweiterung selbst gesendet, daher kann magpie ihre Zeit nicht aufschlüsseln",
+    "Claude Code sent this request itself, so magpie can't split its time": "Diese Anfrage hat Claude Code selbst gesendet, daher kann magpie ihre Zeit nicht aufschlüsseln",
     "magpie is masking this request before routing it (Settings › Privacy), so who takes it isn't picked yet.": "magpie maskiert diese Anfrage vor der Weiterleitung (Einstellungen › Datenschutz), daher steht noch nicht fest, wer sie übernimmt.",
     "magpie hasn't routed this request yet, so who takes it isn't picked yet.": "magpie hat diese Anfrage noch nicht weitergeleitet, daher steht noch nicht fest, wer sie übernimmt.",
     "Nothing took this request: {error}": "Niemand hat diese Anfrage übernommen: {error}",
@@ -1800,6 +1811,7 @@ magpie.strings({
     "“· routing group” is set for every group above": "„· routing group“ wird oben für alle Gruppen eingestellt",
     "{agent} guessed your next message for its composer by itself, reading the whole conversation again. Not a turn of the conversation; Codex composer predictions, under Settings in Codex's row on the Agents page, picks its model, and Codex's Settings › General › Show predictions turns it off.": "{agent} hat deine nächste Nachricht für sein Eingabefeld selbst vorhergesagt und dafür das ganze Gespräch erneut gelesen. Kein Zug des Gesprächs; das Modell wählst du mit Codex-Eingabevorhersagen unter Einstellungen in der Zeile von Codex auf der Seite Agenten, und in Codex unter Einstellungen › Allgemein › Textvorschläge anzeigen schaltest du es ab.",
     "{name} is switched off: the group skips it until it is on again": "{name} ist ausgeschaltet: Die Gruppe überspringt es, bis es wieder eingeschaltet ist",
+    "{n} switched off": "{n} ausgeschaltet",
     "Off: agents aren't offered {name} and a request to it is turned away. Click to switch it on": "Aus: Agents wird {name} nicht angeboten, eine Anfrage daran wird abgewiesen. Klicken zum Einschalten",
     "On: agents may pick {name}. Click to switch it off and keep it as it is": "An: Agents können {name} wählen. Klicken zum Ausschalten – die Gruppe bleibt, wie sie ist",
     "{name} switched on": "{name} eingeschaltet",

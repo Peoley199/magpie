@@ -237,7 +237,14 @@ func NextLogin(ctx context.Context, agent string) (from, to string, back, ok boo
 	if keep && first != nil && first.On && first.Lapsed == "" {
 		return from, first.User, true, true
 	}
-	u := LoginUsage(ctx, agent)
+	// the account it is on, and the one it goes back to, are read; the
+	// spares only once the one it is on is spent (below): every account
+	// read at once on each look was a burst no official client makes
+	var firstUser string
+	if first != nil {
+		firstUser = first.User
+	}
+	u := someLoginUsage(ctx, agent, from, firstUser)
 	now := time.Now()
 	// an account at its usage cap is spent as one at the share below
 	// (account_caps.go): it is moved off, and none is moved to or back to
@@ -261,6 +268,13 @@ func NextLogin(ctx context.Context, agent string) (from, to string, back, ok boo
 	q, known := u[from]
 	if keep || !known || q.Error != "" || !q.Held && !usedPast(q, share, now) && !capped(from, q) {
 		return "", "", false, false
+	}
+	users := make([]string, 0, len(spares))
+	for _, l := range spares {
+		users = append(users, l.User)
+	}
+	for user, q := range someLoginUsage(ctx, agent, users...) {
+		u[user] = q
 	}
 	for _, l := range spares {
 		if q, known := u[l.User]; known && q.Error == "" && !q.Held && !usedPast(q, share, now) && !capped(l.User, q) {
@@ -425,6 +439,8 @@ func KeepOnAnAccountWithRoom(ctx context.Context) {
 		c, cancel := context.WithTimeout(ctx, time.Minute)
 		noteCodexUsedUp(CodexUsedUp(c))
 		cancel()
+		// Codex's own sign-in refused for good, or signed in again since
+		noteCodexGoneNow()
 		t.Reset(codexLookEvery(knownLoginUsage("codex")))
 	}
 }

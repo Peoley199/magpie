@@ -548,6 +548,12 @@ body:not(.side-nav) .side-toggle .st-pane { opacity: 0; }
    Only then: Chromium holds the wheel even in a box that doesn't overflow.
    :where() weighs nothing, so .mchips in a short window still passes it on */
 :where(.holds) { overscroll-behavior-y: contain; }
+/* a page scrolls rather than squeeze what is on it: as a flex column, a
+   view taller than its window shrank every box of a set height, so opening
+   the Gateway page's models took a header from 26px to 21 and moved the
+   head over them up (the owner, 10-29). :where() weighs nothing, so a box
+   that sets its own flex keeps it */
+:where(.view) > * { flex-shrink: 0; }
 @keyframes view-in { from { opacity: 0; transform: translateY(5px); } }
 @media (prefers-reduced-motion: reduce) { .view { animation-name: fade-in; } }
 body.window .view { padding: 2px max(0px, calc(16px - var(--bar, 0px))) 8px 16px; }
@@ -668,6 +674,13 @@ body.panel #agents > .row .ag-handle::before { left: -8px; }
 .ag-acc { display: inline-flex; align-items: center; flex: none; height: 20px; padding: 0 8px; border: 1px solid var(--line); border-radius: 999px; background: var(--card); color: var(--fg-2); font: inherit; font-size: 11.5px; line-height: 1; cursor: pointer; transition: background-color .15s, color .15s; }
 .ag-acc:hover { background: var(--pill); color: var(--fg); }
 .ag-acc:focus-visible { outline: 1.5px solid var(--fg-2); outline-offset: 1px; }
+/* Switch accounts only: the account the agent is signed in to, its menu a click away; a long address is cut, never the row widened */
+.ag-acc.ag-who { gap: 5px; flex: 0 1 auto; min-width: 0; max-width: 100%; padding: 0 7px; }
+.ag-who > svg { flex: none; }
+.ag-who .v { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.ag-who.open { background: var(--pill); color: var(--fg); }
+.ag-who .ok { display: none; flex: none; align-items: center; gap: 3px; color: var(--green); font-weight: 600; }
+.ag-who.done .ok { display: inline-flex; }
 .ag-fix.busy svg > * { transform-box: view-box; transform-origin: 50% 50%; animation: spin .8s linear infinite; }
 /* what has to listen at an address no agent reaches magpie by (#1013): long addresses wrap, and it can be copied */
 .drift-why { overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
@@ -2122,7 +2135,11 @@ body.window .foot { padding-left: 18px; }
    it fits the footer's 22px, so its coming doesn't make the page above
    it shorter and move it */
 .status.ok, .status.err, .status.warn { font-size: 12.5px; line-height: 16px; font-weight: 500; padding: 3px 10px; border-radius: 999px; background: color-mix(in srgb, currentColor 16%, var(--bg)); box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 30%, transparent); }
-.status.lift { position: fixed; z-index: 21; font-size: 12.5px; font-weight: 500; padding: 3px 10px; border-radius: 999px; background: color-mix(in srgb, currentColor 16%, var(--card)); left: 50%; bottom: 18px; transform: translateX(-50%); max-width: calc(100vw - 32px); box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 30%, transparent), 0 6px 20px rgba(0, 0, 0, .28); animation: fade-in .2s var(--ease); }
+.status.lift { position: fixed; z-index: 21; font-size: 12.5px; font-weight: 500; padding: 3px 10px; border-radius: 11px; background: color-mix(in srgb, currentColor 16%, var(--card)); left: 50%; bottom: 18px; transform: translateX(-50%); max-width: calc(100vw - 32px); box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 30%, transparent), 0 6px 20px rgba(0, 0, 0, .28); animation: fade-in .2s var(--ease); }
+/* a line longer than its place floats too (status), and is read whole
+   (littleHong): wrapped, up to ten lines, the rest scrolled to; one line
+   is still a pill (22px tall, 11px corners) */
+body .foot .status.lift { white-space: normal; overflow-wrap: anywhere; text-overflow: clip; width: max-content; max-width: min(560px, calc(100vw - 32px)); max-height: min(166px, 40vh); overflow-y: auto; overscroll-behavior: contain; }
 
 /* ---- picker popover ------------------------------------------------------- */
 .pop {
@@ -2708,7 +2725,8 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
 .acc-line > :is(.amodels:not(.set), .acap:not(.set), .alane:not(.set)):not(.open):not(:focus-visible) { max-width: 0; padding-left: 0; padding-right: 0; margin-left: -9px; box-shadow: none; opacity: 0; }
 /* ⋯: a hover brings it out, beside what ends the row */
 .acc .acc-more { flex: none; display: inline-grid; place-items: center; width: 22px; height: 20px; padding: 0; border: 0; border-radius: 5px; background: none; color: var(--muted); cursor: default; opacity: 0; transition: opacity .15s, background .12s, color .12s; }
-.acc:hover .acc-more, .acc .acc-more:focus-visible, .acc.tools-open .acc-more { opacity: 1; }
+.acc:hover .acc-more, .acc.tools-open .acc-more { opacity: 1; }
+.acc .acc-more:focus-visible { opacity: 1; } /* its own rule: Safari before 15.4 drops a list holding it */
 .acc .acc-more:hover { color: var(--fg); background: var(--pill-hover); }
 .acc.tools-open .acc-more { color: var(--fg); background: var(--pill); }
 /* and its line, under the quota, lined up with it */
@@ -2740,6 +2758,11 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
   .accts.keys .acc:not(:hover) > .alane:not(.set):not(.open):not(:focus) { margin-left: -9px; }
 }
 .accts.keys .acc .using, .accts.keys .acc > .text:not(.quiet) { flex: none; white-space: nowrap; }
+/* Switch off on hover, beside Remove (wei_VC on X): in a narrow weighted
+   list the weight pill and Make first leave no room for it, and the name
+   went to nothing; there the tick dot alone switches an on key off */
+.accts.keys { container-type: inline-size; }
+@container (max-width: 520px) { .accts.keys.weighted .acc > .key-switch.quiet { display: none; } }
 #gatewayKeys .acc { min-width: 0; }
 #gatewayKeys .acc .plan { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 /* a gateway key's own limit (#585): the badge, what it used under the

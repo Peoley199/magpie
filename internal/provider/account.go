@@ -1127,10 +1127,20 @@ func codexTokenRenewing(ctx context.Context, dir, stale string) (tok, accountID 
 		return "", "", errors.New("Codex is signed out; run codex login")
 	}
 	accountID = codexAccountID(a)
-	tok, err = codexRefresh(ctx, raw)
+	reason := codexRefreshExpiry
+	if stale != "" {
+		reason = codexRefreshRecovery
+	}
+	tok, err = codexRefresh(ctx, raw, reason)
 	if err != nil {
+		// OpenAI refused this sign-in for good: Codex is signed out to
+		// magpie's wiring until it is signed in again (#4308)
+		if errors.As(err, new(codexRefreshGoneError)) {
+			noteCodexSignInGone(dir, a.Tokens.RefreshToken)
+		}
 		return "", "", err
 	}
+	forgetCodexSignInGone(dir)
 	// keep every other field as Codex wrote it. auth.json is the user's
 	// own sign-in, which Codex CLI and the Codex app read: written beside
 	// it, flushed and renamed in, never truncated in place, so a machine
@@ -1158,9 +1168,39 @@ func codexAccountID(a codexAuth) string {
 	return claimString(jwtClaims(a.Tokens.IDToken), "https://api.openai.com/auth", "chatgpt_account_id")
 }
 
+// Why a ChatGPT sign-in is refreshed, in the words codex-rs sends with
+// its own refresh (refresh_reason, login/src/oauth/client.rs).
+const (
+	codexRefreshExpiry    = "proactive_expiry"      // its access token is about to run out
+	codexRefreshScheduled = "scheduled"             // not refreshed for keepAliveEvery
+	codexRefreshRecovery  = "unauthorized_recovery" // the backend called its token expired
+	codexRefreshForced    = "forced"                // asked for: an import, a check
+)
+
+type refreshReasonKey struct{}
+
+// refreshingFor has a forced refresh made under ctx say why it is made,
+// when it is more than "forced" (the keep-alive's "scheduled").
+func refreshingFor(ctx context.Context, reason string) context.Context {
+	return context.WithValue(ctx, refreshReasonKey{}, reason)
+}
+
+// forcedReason is why ctx forces a refresh: what refreshingFor said, else
+// "forced".
+func forcedReason(ctx context.Context) string {
+	if r, _ := ctx.Value(refreshReasonKey{}).(string); r != "" {
+		return r
+	}
+	return codexRefreshForced
+}
+
 // codexRefresh renews the tokens of an auth.json-shaped sign-in in place,
 // every other field left as it was, and returns the new access token.
-func codexRefresh(ctx context.Context, raw map[string]any) (string, error) {
+// It is asked as codex-rs asks it (request_chatgpt_token_refresh): a JSON
+// body of client_id, grant_type, refresh_token and refresh_reason, with
+// no scope (a refresh keeps the scopes granted), and Codex's originator
+// and User-Agent.
+func codexRefresh(ctx context.Context, raw map[string]any, reason string) (string, error) {
 	toks, _ := raw["tokens"].(map[string]any)
 	if toks == nil {
 		toks = map[string]any{}
@@ -1179,12 +1219,13 @@ func codexRefresh(ctx context.Context, raw map[string]any) (string, error) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
 	body, _ := json.Marshal(map[string]string{"client_id": codexClientID, "grant_type": "refresh_token",
-		"refresh_token": refresh, "scope": "openid profile email"})
+		"refresh_token": refresh, "refresh_reason": reason})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, codexTokenURL, bytes.NewReader(body))
 	if err != nil {
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	codexClientHeaders(req.Header, codexVersion())
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return "", errors.New("Codex token refresh: " + err.Error())
@@ -1197,7 +1238,12 @@ func codexRefresh(ctx context.Context, raw map[string]any) (string, error) {
 		RefreshToken string `json:"refresh_token"`
 	}
 	if res.StatusCode != 200 || json.Unmarshal(b, &fresh) != nil || fresh.AccessToken == "" {
-		return "", refreshFailed(res.StatusCode, "Codex", "Codex is signed out (token refresh failed); run codex login")
+		err := refreshFailed(res.StatusCode, "Codex", "Codex is signed out (token refresh failed); run codex login")
+		if res.StatusCode != 200 && codexRefreshGone(res.StatusCode, b) {
+			// refused for good, by Codex's own rule (#4308)
+			err = codexRefreshGoneError{err}
+		}
+		return "", err
 	}
 	toks["access_token"] = fresh.AccessToken
 	if fresh.IDToken != "" {

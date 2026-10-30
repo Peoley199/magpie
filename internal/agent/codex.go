@@ -2441,6 +2441,18 @@ func codexChatGPTKnown(dir string) (signedIn, known bool) {
 	if settings.AccountDiscoveryOff() {
 		return false, true
 	}
+	// forced_login_method = "api" in Codex's own config (another tool or
+	// guide writes it; magpie never does): Codex won't use a ChatGPT
+	// sign-in then. The TUI logs it out on start and the app server reads
+	// no account (openai/codex login/src/auth/manager.rs
+	// enforce_login_restrictions, load_auth), so wired beside it the
+	// Codex app asked for a sign-in and offered an API key alone (Tiger on
+	// Discord: "重启 codex 之后登不回去了"). Counted as no sign-in, magpie
+	// is the provider and Codex needs none. The line is the user's own and
+	// stays: taking it out is how they sign in to ChatGPT again.
+	if v, ok := edit.GetTOMLTop(filepath.Join(dir, "config.toml"), "forced_login_method"); ok && strings.EqualFold(strings.TrimSpace(v), "api") {
+		return false, true
+	}
 	var a struct {
 		Tokens *struct {
 			Access string `json:"access_token"`
@@ -2456,7 +2468,18 @@ func codexChatGPTKnown(dir string) (signedIn, known bool) {
 		// valid JSON that isn't an object: not a sign-in Codex wrote
 		return false, false
 	}
-	return a.Tokens != nil && a.Tokens.Access != "", true
+	if a.Tokens == nil || a.Tokens.Access == "" {
+		return false, true
+	}
+	// a sign-in OpenAI refused to refresh for good (revoked, or failed for
+	// good, #4308): Codex keeps its auth.json, but beside it every turn
+	// fails at Codex's workspace routing discovery, magpie's models too.
+	// None to magpie, as forced api above, until it is signed in again
+	// (another refresh token). A record that can't be read says nothing.
+	if gone, known := provider.CodexSignInGone(dir, b); !known || gone {
+		return false, known
+	}
+	return true, true
 }
 
 // codexReached reads Codex's newest model request since a time — the
