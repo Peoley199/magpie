@@ -36,7 +36,9 @@
 bash scripts/fork-sync.sh --yes            # 全流程，含构建；不推送
 bash scripts/fork-sync.sh --yes --push     # 全流程 + 推送 origin main
 bash scripts/fork-sync.sh --yes --suite    # 额外跑 45m 全量套件（本机一次只跑一个套件）
-bash scripts/fork-suite-compare.sh         # 合并后跑：与基线对照红测试，判定回归
+bash scripts/fork-sync.sh --yes --push --install 'D:\magpie'   # 再替换桌面应用（留 .bak 档）
+bash scripts/fork-sync.sh --build-only --install 'D:\magpie'   # 不同步，只重建并安装当前头
+bash scripts/fork-suite-compare.sh /tmp/fork-suite.log         # 红测试：回归 vs 预存
 ```
 
 人工需要判断的只有两处（其余全自动）：
@@ -101,7 +103,50 @@ dist/magpie.exe --version   # 冒烟
 注意：脚本用 `set -uo pipefail`（**没有** `set -e`），因为脏树检查那行是
 `grep -q . && die` 形式——去掉 `set -e` 才不会在正常路径上误中止。
 
-## 七、验证命令速查
+## 七、桌面版构建与安装（D:\magpie）
+
+**桌面应用必须按 Makefile 的 `release-windows` 构建**，不是普通 `go build`：
+
+```
+go run github.com/tc-hib/go-winres@v0.3.3 make --in build/windows/winres.json \
+    --arch amd64 --out rsrc --file-version 0.1.2119 --product-version 0.1.2119
+CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags="-s -w" \
+    -o internal/update/launcher-amd64.com ./internal/update/launcher
+CGO_ENABLED=0 go build -tags production,comlauncher -trimpath \
+    -ldflags="-s -w -X main.version=$(git describe --tags --always) -H windowsgui" \
+    -o dist/magpie-windows-amd64.exe .
+rm -f rsrc_windows_*.syso internal/update/launcher-*.com
+```
+
+四个关键点，漏掉任何一个产物都不对：
+
+| 要素 | 作用 | 怎么验 |
+| --- | --- | --- |
+| `-H windowsgui` | GUI 子系统，否则启动会弹控制台窗口 | PE 头 subsystem 必须是 **2**（3=console） |
+| `comlauncher` tag | 把 COM launcher 嵌进 exe（开机/快捷方式路径） | `internal/update/com_embed_windows_*.go` |
+| go-winres | 图标 + 文件版本资源（资源管理器里显示 0.1.2119） | PowerShell `VersionInfo.FileVersion` |
+| `-tags production` | 生产构建（与发布版一致） | 未带时二进制明显偏小/功能不同 |
+
+**可复现性已实测**：在 `14d97a93` 上用上面这组命令重建，得到 60,389,888 字节，与用户原来
+`D:\magpie\magpie-windows-amd64.exe` 大小完全一致（说明命令就是发布流程的那一组）。新头
+`0973e30a` 是 71,850,496 字节，增量来自上游 244 个提交（.text +2.6MB、.rdata +6.9MB），
+不是构建参数出差错。
+
+**安装**（脚本 `--install` 自动做）：
+
+```
+tasklist | grep -i magpie     # 先确认没在运行，运行中 Windows 会锁住 exe
+cp -p magpie-windows-amd64.exe magpie-windows-amd64.exe.bak-v<旧版本>   # 旧版留档
+cp dist/magpie-windows-amd64.exe magpie-windows-amd64.exe
+./magpie-windows-amd64.exe --version
+```
+
+`D:\magpie` 现有的 `.bak` / `.bak-v0.1.1373` 就是同一套留档约定。GUI 子系统的 exe 从控制台
+调用 `--version` 仍有输出，可以直接冒烟。
+
+**不要安装 `dist/magpie.exe`**——那是 console 子系统的开发用构建，装上去会多一个黑窗口。
+
+## 八、验证命令速查
 
 ```
 # fork 修复核心测试（最快闸门）
