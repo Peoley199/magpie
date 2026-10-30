@@ -1,0 +1,94 @@
+# Fork 同步与构建手册（Peoley199/magpie）
+
+本 fork 的上游是 `yetone/magpie`（remote 名 `upstream`），fork 自己的改动长期保留在上游之外。
+本文是 2026-10-30 两次同步（7499ebb5→cd10dfbe 700 提交、cd10dfbe→cdf8151a 40 提交）沉淀的
+操作手册，配套两个脚本：
+
+- `scripts/fork-sync.sh` — 调查→方案→合并→验证→（推送）→构建，一条命令跑完；
+- `scripts/fork-suite-compare.sh` — 合并头与合并前基线的红测试对照（判断"回归还是预存"）。
+
+## 一、本机环境事实（先读）
+
+| 事实 | 结论 |
+| --- | --- |
+| 直连 github.com:443 / proxy.golang.org 被墙 | git 网络命令加 `-c http.proxy=http://127.0.0.1:7897`；go 命令加 `HTTPS_PROXY=http://127.0.0.1:7897 HTTP_PROXY=...`。代理端口读注册表 `HKCU\...\Internet Settings\ProxyServer`（当前 7897）；`JAVA_TOOL_OPTIONS` 里的 7892 无进程监听，别用 |
+| Windows CI/上游 CI 只编译 `_test.go` 不运行 | 上游自带的 Windows-only 测试缺陷（symlink 权限、Keychain、loopback 句柄、GOOS 守卫缺失）在本地全量跑时会红，**绝大多数不是回归**——判回归必须跑基线对照 |
+| 本机 Bun 1.3.14 < 1.4.2 | `TestZCodeStartPlanTakesNoSystem`、`TestPluginToldWhereTheAgentWorks` 等插件端到端测试自动 SKIP，属已知限制 |
+| 本机无 make/gcc | Windows 构建 Wails GUI 不需要 cgo，直接 `go build -tags production` 即可；不要走 Makefile |
+
+## 二、fork 的自有提交（合并时必须保留的指纹）
+
+| 指纹（文件 + 特征串） | 作用 |
+| --- | --- |
+| `internal/gateway/claude_room.go` 里的 `path.Clean("/" + parts[2])` | memLimit 的 cgroup 路径是 Unix 路径，Windows 上 `filepath` 会死循环 |
+| `internal/gateway/anthropic_shapes.go` 里的 `zcodeStartPlan` / `withoutZCodeSystem` / `systemText` | ZCode Start Plan（无 GLM key 的 zcode 插件账号）拒绝一切带 system 的请求（405/3012），发前摘除并把文本挪进首条用户消息 |
+| `internal/gateway/workdir.go` 里的 `zcodeWorkDir` | ZCode 的 `- Primary working directory:` 行与 Claude Code 的 ` - ` 行区分 |
+| `internal/gateway/gateway.go` forwardOnce 里 `if to == provider.Anthropic && zcodeStartPlan(p)` | 上述摘除的调用点（在 `fitUserBetas` 之后） |
+| 测试：`internal/gateway/zcode_start_system_test.go`、`testdata/workdir/zcode-3.16.3.json`、`workdir_test.go` 的 ZCode 用例 | fork 自有，上游没有 |
+
+合并前先查**上游是否已自行实现了等价物**（`git grep <指纹> upstream/main`）：上游对 ZCode 3012
+的处理是互补方向（`restrictedSaid` 事后让账号休息），两者共存，不算重复；若上游真采纳了同一修复
+（如 `path.Clean` 出现在上游 claude_room），合并会冲突或变成冗余，需在合并信息里说明并清理。
+
+## 三、标准流程（脚本已自动化）
+
+```
+bash scripts/fork-sync.sh --yes            # 全流程，含构建；不推送
+bash scripts/fork-sync.sh --yes --push     # 全流程 + 推送 origin main
+bash scripts/fork-sync.sh --yes --suite    # 额外跑 45m 全量套件（本机一次只跑一个套件）
+bash scripts/fork-suite-compare.sh         # 合并后跑：与基线对照红测试，判定回归
+```
+
+人工需要判断的只有两处（其余全自动）：
+
+1. **合并前**：脚本打印"调查报告"（双方领先数、fork 自有提交、文件重叠、上游是否已采纳指纹）。
+   若显示零重叠或重叠不相交 → 直接放行；若上游已采纳某指纹 → 停下人工决策。
+2. **全量套件红时**：跑 `scripts/fork-suite-compare.sh`，凡"基线也红（签名一致）"或"上游新测试
+   在 Windows 的已知缺陷类"（symlink 权限 / loopback 句柄 / GOOS 守卫 / 跨测试 LOCALAPPDATA 污染 /
+   TempDir 文件锁）→ 放行；凡签名变化或无法归类 → 停下查因。
+
+### 10-30 实测记录（基线 51 个预存红 + 15 个上游自带红，0 回归）
+
+预存红签名逐一与基线相同（symlink/Keychain/`/bin/sh`/macOS 断言等）。15 个"仅合并头红"的归类：
+- 5 个 plugin page 测试：`os.Symlink` 无管理员权限失败；
+- 4 个 handover 测试（c26b2992 新增）：`A device attached to the system is not functioning`，
+  与预存的 #3568 同类（Windows loopback 文件句柄）；
+- 3 个 Hermes 测试（34d38ed6 新增）：fixture 根目录落在 `LOCALAPPDATA\hermes`，testenv 把
+  LOCALAPPDATA 指向同进程共享的临时 home，测试间互相污染（Linux 下根在各测试自己的 TempDir 不触发）；
+- 1 个 `TestCodexDaemonEnvIsTheTerminals`（4534561f）：断言 Linux 行为，`codexDaemonEnv` 在
+  Windows 有提前返回（`codex_daemon.go:378`），测试缺 GOOS 守卫；
+- 1 个 `TestFnmWinBins`：fixture 依赖 symlink 成功；
+- 1 个 `TestLibraryMCPHub`：断言全过，仅 TempDir 清理遇 Windows 文件锁。
+
+## 四、远端仓库的处理
+
+- **推送**：`git push origin main`，永远是 fast-forward（合并方式保证不改写历史）。禁止 rebase
+  fork 自有提交后强推。
+- **下次同步的起点**：合并后 `git merge-base main upstream/main` 就是上游最新提交——后续
+  `git fetch upstream && git merge upstream/main` 天然只算增量，无需任何清理。
+- **tag**：上游 tag 用 `git fetch upstream --tags` 补拉；版本号以 `git describe --tags upstream/main`
+  为准（10-30 时是 v0.1.2115 = cdf8151a）。
+- 合并提交信息按惯例：一行主题（提交数 + fork 修复保留）+ 正文（上游要点、fork 修复为何保留、
+  冲突情况、跑了什么）。
+
+## 五、构建
+
+```
+VERSION=$(git describe --tags --always --dirty | tr -cd 'A-Za-z0-9._+-')
+# 桌面版（含 Wails GUI，Windows 无需 cgo）：
+go build -tags production -trimpath -ldflags="-s -w -X main.version=$VERSION" -o dist/magpie.exe .
+# 纯 CLI（网关/serve 模式）：
+CGO_ENABLED=0 go build -tags nogui -trimpath -ldflags="-s -w -X main.version=$VERSION" -o dist/magpie-cli.exe .
+dist/magpie.exe --version   # 冒烟
+```
+
+产物放 `dist/`（上游 .gitignore 已忽略，不污染工作树）。版本串加 `-fork` 后缀可区分 fork 构建。
+
+## 六、验证命令速查
+
+```
+# fork 修复核心测试（最快闸门）
+HTTPS_PROXY=http://127.0.0.1:7897 go test ./internal/gateway -run 'TestWithoutZCodeSystem|TestWorkDir|TestClaudeMem|TestZCodeStartPlan' -count=1
+# 全量（LESSONS：-timeout 45m，tee 落盘，一次一个套件）
+HTTPS_PROXY=http://127.0.0.1:7897 go test -timeout 45m ./... 2>&1 | tee /tmp/full-suite.log
+```
