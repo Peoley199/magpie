@@ -172,6 +172,7 @@ build() {
     die "magpie is running — quit it from the tray, then run again"
   fi
   old=$("$target" --version 2>/dev/null | awk '{print $2}')
+  old=${old#v}   # .bak-v0.1.2119, as the folder's older backups are named
   cp -p "$target" "$target.bak-v${old:-unknown}" || die "backup of $target failed"
   cp dist/magpie-windows-amd64.exe "$target" || die "copy to $target failed"
   echo "installed $target ($("$target" --version))"
