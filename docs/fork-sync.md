@@ -1,8 +1,8 @@
 # Fork 同步与构建手册（Peoley199/magpie）
 
 本 fork 的上游是 `yetone/magpie`（remote 名 `upstream`），fork 自己的改动长期保留在上游之外。
-本文是 2026-10-30 两次同步（7499ebb5→cd10dfbe 700 提交、cd10dfbe→cdf8151a 40 提交）沉淀的
-操作手册，配套两个脚本：
+本文是 2026-10-30 几轮同步（7499ebb5→cd10dfbe 700 提交、→cdf8151a 40、→ffa07395 4、
+→f7f2d75f 149）沉淀的操作手册，配套两个脚本：
 
 - `scripts/fork-sync.sh` — 调查→方案→合并→验证→（推送）→构建，一条命令跑完；
 - `scripts/fork-suite-compare.sh` — 合并头与合并前基线的红测试对照（判断"回归还是预存"）。
@@ -14,17 +14,23 @@
 | 直连 github.com:443 / proxy.golang.org 被墙 | git 网络命令加 `-c http.proxy=http://127.0.0.1:7897`；go 命令加 `HTTPS_PROXY=http://127.0.0.1:7897 HTTP_PROXY=...`。代理端口读注册表 `HKCU\...\Internet Settings\ProxyServer`（当前 7897）；`JAVA_TOOL_OPTIONS` 里的 7892 无进程监听，别用 |
 | Windows CI/上游 CI 只编译 `_test.go` 不运行 | 上游自带的 Windows-only 测试缺陷（symlink 权限、Keychain、loopback 句柄、GOOS 守卫缺失）在本地全量跑时会红，**绝大多数不是回归**——判回归必须跑基线对照 |
 | 本机 Bun 1.3.14 < 1.4.2 | `TestZCodeStartPlanTakesNoSystem`、`TestPluginToldWhereTheAgentWorks` 等插件端到端测试自动 SKIP，属已知限制 |
-| 本机无 make/gcc | Windows 构建 Wails GUI 不需要 cgo，直接 `go build -tags production` 即可；不要走 Makefile |
+| 本机无 make/gcc | 构建见 §七：桌面应用直接 `go build -tags production,comlauncher -H windowsgui`，不需要 make，也不需要 cgo |
 
 ## 二、fork 的自有提交（合并时必须保留的指纹）
 
 | 指纹（文件 + 特征串） | 作用 |
 | --- | --- |
-| `internal/gateway/claude_room.go` 里的 `path.Clean("/" + parts[2])` | memLimit 的 cgroup 路径是 Unix 路径，Windows 上 `filepath` 会死循环 |
+| `internal/gateway/claude_room.go` 里的 `dir := path.Clean`（**不是** `filepath.Clean`） | memLimit 的 cgroup 路径是 Unix 路径，Windows 上 `filepath` 会死循环 |
 | `internal/gateway/anthropic_shapes.go` 里的 `zcodeStartPlan` / `withoutZCodeSystem` / `systemText` | ZCode Start Plan（无 GLM key 的 zcode 插件账号）拒绝一切带 system 的请求（405/3012），发前摘除并把文本挪进首条用户消息 |
 | `internal/gateway/workdir.go` 里的 `zcodeWorkDir` | ZCode 的 `- Primary working directory:` 行与 Claude Code 的 ` - ` 行区分 |
 | `internal/gateway/gateway.go` forwardOnce 里 `if to == provider.Anthropic && zcodeStartPlan(p)` | 上述摘除的调用点（在 `fitUserBetas` 之后） |
 | 测试：`internal/gateway/zcode_start_system_test.go`、`testdata/workdir/zcode-3.16.3.json`、`workdir_test.go` 的 ZCode 用例 | fork 自有，上游没有 |
+
+**指纹必须是判别式的**。10-30 第一次写成 `path\.Clean\("/" \+ parts\[2\]\)`，它匹配的是
+`filepath.Clean("/" + parts[2])` 的**子串**——正是我们要替换的那行代码。脚本因此对 upstream 报
+"upstream adopted a fork fix"，而实际上上游 `claude_room.go:167` 仍是 `filepath.Clean`。换成
+`dir := path\.Clean` 后两边才算得清。写新指纹时用 `git grep` 在 `upstream/main` 和我们 `main`
+上各跑一次：必须一个匹配、一个不匹配。
 
 合并前先查**上游是否已自行实现了等价物**（`git grep <指纹> upstream/main`）：上游对 ZCode 3012
 的处理是互补方向（`restrictedSaid` 事后让账号休息），两者共存，不算重复；若上游真采纳了同一修复
@@ -75,27 +81,23 @@ bash scripts/fork-suite-compare.sh /tmp/fork-suite.log         # 红测试：回
 
 ## 五、构建
 
-```
-VERSION=$(git describe --tags --always --dirty | tr -cd 'A-Za-z0-9._+-')
-# 桌面版（含 Wails GUI，Windows 无需 cgo）：
-go build -tags production -trimpath -ldflags="-s -w -X main.version=$VERSION" -o dist/magpie.exe .
-# 纯 CLI（网关/serve 模式）：
-CGO_ENABLED=0 go build -tags nogui -trimpath -ldflags="-s -w -X main.version=$VERSION" -o dist/magpie-cli.exe .
-dist/magpie.exe --version   # 冒烟
-```
-
-产物放 `dist/`（上游 .gitignore 已忽略，不污染工作树）。版本串加 `-fork` 后缀可区分 fork 构建。
+构建与安装的完整步骤见 [§七](#七桌面版构建与安装dmagpie)。要点：桌面应用走 release-windows
+那组命令（go-winres + comlauncher + `-H windowsgui`），**不要**用普通 `go build`；纯 CLI 用
+`-tags nogui` + `CGO_ENABLED=0`。产物放 `dist/`（上游 .gitignore 已忽略，不污染工作树）。
 
 ## 六、脚本实测记录（2026-10-30，全部通过）
 
-`fork-sync.sh` 三条路径实跑：
+`fork-sync.sh` 各路径实跑：
 - **调查模式**（无参数）：拉取 → 双向计数 → fork 提交清单 → 文件重叠 → 指纹核查 → 干跑合并并验证
   指纹存活，然后停止，零改动；
 - **全流程**（`--yes`）：自动合并 cdf8151a→ffa07395（4 提交，含 Responses WebSocket #4058），
-  `go build ./...`、`gofmt`、`go vet`、fork 测试全绿，构建出 `dist/magpie.exe` 与
-  `dist/magpie-cli.exe`（`v0.1.2119-11-g6ae51122-fork`）；
+  `go build ./...`、`gofmt`、`go vet`、fork 测试全绿；后又自动合并 149 提交
+  （ffa07395→v0.1.2232），一次跑通"合并→验证→构建→安装→推送"；
+- **构建+安装**（`--build-only --install 'D:\magpie'`）：重建当前头、替换 `D:\magpie` 里的桌面
+  应用、旧版留 `.bak-v<版本>`；
 - **幂等**（`--yes --push`，上游已全部合入）：正确输出 `nothing to sync` 并退出，不误合并；
-- **脏树保护**：工作树有未提交改动时在任何改动前 `STOP`。
+- **脏树保护**：工作树有未提交改动时在任何改动前 `STOP`；
+- **指纹守护**：上游若采纳同一修复会 `STOP` 让人决策（10-30 因指纹写错误报过一次，见 §二）。
 
 `fork-suite-compare.sh` 两种输入实跑：预存红 → 判定 "NO new failures" + 签名一致；注入一个假的新
 失败 → 准确列为 "failures NEW on the merge head"。
