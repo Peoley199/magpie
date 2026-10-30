@@ -18,7 +18,9 @@ package library
 //     (httpSession), or over its event stream (SSE).
 //
 // magpie's own image server is never behind the hub: it asks the agent
-// that started it for its roots. What a server lists is kept until it says
+// that started it for its roots. Nor is a server the user keeps direct
+// (Server.Hub, #4382): a command that reads its project from the folder
+// it starts in, or keeps a session's state, is each agent's own. What a server lists is kept until it says
 // its tools changed, or the server is edited.
 
 import (
@@ -66,9 +68,31 @@ func SetMCPHub(on bool) (*Result, error) {
 	return res, err
 }
 
+// HubDirect is Server.Hub for a server the hub leaves out: each agent
+// given it keeps its own entry, as with the hub off (#4382).
+const HubDirect = "direct"
+
 // inHub is whether the hub gives s: every server but magpie's own image
-// server, which asks its agent for its roots.
-func inHub(s *Server) bool { return !isSelf(s) }
+// server, which asks its agent for its roots, and one the user keeps
+// direct (Server.Hub).
+func inHub(s *Server) bool { return !isSelf(s) && s.Hub != HubDirect }
+
+// ServerHub shares a server through the hub, or keeps it each agent's own
+// entry (direct); the agents are written again at once, so the entry it
+// had the other way goes.
+func ServerHub(name string, direct bool) (*Result, error) {
+	return change(func(l *Library) error {
+		s := l.server(name)
+		if s == nil {
+			return fmt.Errorf("no server called %s", name)
+		}
+		s.Hub = ""
+		if direct {
+			s.Hub = HubDirect
+		}
+		return nil
+	})
+}
 
 // hubServerFor is the entry agent t is given for the hub, at the address
 // the agent reaches the gateway at, with a key when it reaches it from

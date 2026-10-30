@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/yetone/magpie/internal/agent"
@@ -1065,6 +1066,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 	contextRoutesAPI(mux)
 	tuneRoutes(mux)
 	groupRoutes(mux)
+	localHostsRoutes(mux)
 	// how each key's or account's requests stand under its limit on
 	// requests at once (#892), read every two seconds while a provider's
 	// rows are shown; empty when the gateway runs elsewhere
@@ -1320,6 +1322,9 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			// As, for test: the agent the request is asked as
 			// (provider.TestAs: "codex", "claude-code"), "" as magpie
 			As string `json:"as"`
+			// Run, for test and teststop: the window's name for one
+			// test, which its Stop ends (testRuns)
+			Run string `json:"run"`
 			// DetectModels, for detect: models to ask on each API, each
 			// answered on its own, in place of Model
 			DetectModels []string `json:"detectModels"`
@@ -1987,11 +1992,25 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				fail(rw, err)
 				return
 			}
+		case "teststop":
+			if stop, ok := testRuns.LoadAndDelete(req.Run); ok && req.Run != "" {
+				stop.(context.CancelFunc)()
+			}
+			rw.WriteHeader(http.StatusNoContent)
+			return
 		case "test":
 			p, err := provider.Find(in.ID)
 			if err != nil {
 				fail(rw, err)
 				return
+			}
+			ctx := r.Context()
+			if req.Run != "" {
+				var stop context.CancelFunc
+				ctx, stop = context.WithCancel(ctx)
+				defer stop()
+				testRuns.Store(req.Run, stop)
+				defer testRuns.Delete(req.Run)
 			}
 			saved := *p
 			if req.Typed {
@@ -2000,12 +2019,12 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			}
 			if len(req.Test) > 0 {
 				// an image model's test draws a picture, which takes longer
-				ctx, cancel := context.WithTimeout(provider.TestAs(r.Context(), req.As), 3*time.Minute)
+				ctx, cancel := context.WithTimeout(provider.TestAs(ctx, req.As), 3*time.Minute)
 				defer cancel()
 				writeJSON(rw, map[string]any{"results": p.TestModels(ctx, req.Test)})
 				return
 			}
-			ctx, cancel := context.WithTimeout(provider.TestAs(r.Context(), req.As), 25*time.Second)
+			ctx, cancel := context.WithTimeout(provider.TestAs(ctx, req.As), 25*time.Second)
 			defer cancel()
 			writeJSON(rw, struct {
 				Results  []provider.Result `json:"results"`
@@ -2534,6 +2553,13 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 		rw.WriteHeader(http.StatusNoContent)
 	})
 }
+
+// testRuns: the provider tests under way by the name the window gave each
+// (Run), each with what ends it: Stop ends the test's requests to the
+// vendor, here as well as by the fetch it aborts, which WebView2 doesn't
+// end the request's context for (RIck on Discord: a test couldn't be
+// stopped)
+var testRuns sync.Map
 
 // typed is the saved provider p as the editor's form has it (in), for
 // Refresh and Test models before a Save: a key pasted to replace the saved

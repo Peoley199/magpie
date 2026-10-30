@@ -169,6 +169,7 @@ func TestSettingsSaveKeepsWhatItDoesNotSend(t *testing.T) {
 		ChinaMirror:          true,
 		CodexAutoReset:       []string{"me@example.com"},
 		CodexAutoResetOnly:   map[string]string{"me@example.com": "expiring"},
+		CodexResetLead:       180,
 		CodexNoCredits:       []string{"me@example.com"},
 		CodexWarmAtOf:        map[string]string{"me@example.com": "09:00"},
 		TextSize:             125,

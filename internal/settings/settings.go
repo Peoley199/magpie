@@ -275,7 +275,7 @@ type Settings struct {
 	// of their rate-limit resets by themselves once their weekly window is
 	// used up and no other account can take the request: at most one a
 	// week each (see provider.AutoUseCodexReset); and one about to run out
-	// unused half an hour before it does, or at once when the account is
+	// unused CodexResetLead before it does, or at once when the account is
 	// held up past then (provider.SpendExpiringCodexResets).
 	CodexAutoReset []string `json:"codexAutoReset,omitempty"`
 	// CodexAutoResetOnly narrows an account in CodexAutoReset to one of
@@ -285,6 +285,15 @@ type Settings struct {
 	// about to run out only. An account not in it uses one at both, as
 	// every account did before the two were split.
 	CodexAutoResetOnly map[string]string `json:"codexAutoResetOnly,omitempty"`
+	// CodexResetLead is how many minutes before a reset about to run out
+	// unused an account with CodexAutoReset's "expiring" spends it (the
+	// owner, 10-30: 把提前用卡的时间做成可配置的): from CodexResetLeadLeast
+	// to CodexResetLeadMost, 0 for CodexResetLeadDefault. Earlier loses
+	// what the windows have left then (#718), so the default is late.
+	// One for every account: whether an account spends one is its own
+	// say, how early is the same trade for each. Read through
+	// ResetLead, which takes a value out of range for the default.
+	CodexResetLead int `json:"codexResetLead,omitempty"`
 	// CodexNoCredits are the ChatGPT accounts (lower-case) that don't
 	// spend their credits: once a usage window is used up, routing holds
 	// the account as used up and goes on to the user's other accounts,
@@ -1024,6 +1033,28 @@ func (s Settings) ImageWait() time.Duration {
 		m = ImageTimeoutDefault
 	}
 	return time.Duration(min(m, ImageTimeoutMost)) * time.Minute
+}
+
+// CodexResetLeadDefault is CodexResetLead's minutes when it is unset, and
+// CodexResetLeadLeast and CodexResetLeadMost the range it can be set in;
+// CodexResetLeads the choices the app and the CLI's words offer.
+const (
+	CodexResetLeadDefault = 30
+	CodexResetLeadLeast   = 15
+	CodexResetLeadMost    = 24 * 60
+)
+
+var CodexResetLeads = []int{15, 30, 60, 120, 180, 360, 720, 1440}
+
+// ResetLead is how long before a Codex reset about to run out unused it
+// is spent by itself: CodexResetLead's minutes, CodexResetLeadDefault's
+// when it is 0 or out of range (written by hand), never none.
+func (s Settings) ResetLead() time.Duration {
+	m := s.CodexResetLead
+	if m < CodexResetLeadLeast || m > CodexResetLeadMost {
+		m = CodexResetLeadDefault
+	}
+	return time.Duration(m) * time.Minute
 }
 
 // ClassifyTimeoutDefault is the seconds a classifier is given when

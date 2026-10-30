@@ -1,33 +1,41 @@
 package provider
 
-import "net/url"
+import (
+	"net"
 
-// SkipsRedaction says requests to p go unmasked: the user set Unredacted,
-// and every address p has is on this machine or the local network. One
-// edited to a vendor's afterwards is masked again. A signed-in account, a
-// plugin's provider and another magpie are always masked: each reaches a
-// vendor.
+	"github.com/yetone/magpie/internal/netproxy"
+)
+
+// SkipsRedaction says requests to p go unmasked: the user set Unredacted
+// ("Send requests unmasked") and p has an address. It is the user's word
+// whatever the address (AcMilan on Discord: the user decides for each
+// provider); the editor cautions when an address isn't on this machine or
+// the local network (LocalHost), and nothing here looks one up. A
+// signed-in account, a plugin's provider and another magpie are always
+// masked: each reaches a vendor.
 func (p Provider) SkipsRedaction() bool {
 	if !p.Unredacted || p.Account != nil || p.IsRemoteMagpie() {
 		return false
 	}
-	return LocalAddresses(p.Chat, p.Responses, p.Anthropic, p.Gemini, p.Decide)
+	for _, b := range []string{p.Chat, p.Responses, p.Anthropic, p.Gemini, p.Decide} {
+		if b != "" {
+			return true
+		}
+	}
+	return false
 }
 
-// LocalAddresses says every non-empty base URL among bases is on this
-// machine or the local network (localhost, *.local, a loopback or private
-// IP), and there is at least one.
-func LocalAddresses(bases ...string) bool {
-	n := 0
-	for _, b := range bases {
-		if b == "" {
-			continue
-		}
-		u, err := url.Parse(b)
-		if err != nil || u.Host == "" || !local(u.Hostname()) {
-			return false
-		}
-		n++
+// LocalHost says host is on this machine or the local network: localhost,
+// a .local name, a loopback, private or link-local IP, or a name every
+// address of which is one (netproxy.LocalName, looked up now and kept a
+// minute; one that doesn't resolve isn't). Only the editor's caution asks
+// it (/api/local-hosts), never a request.
+func LocalHost(host string) bool {
+	if local(host) {
+		return true
 	}
-	return n > 0
+	if ip := net.ParseIP(host); ip != nil {
+		return netproxy.LocalIP(ip)
+	}
+	return netproxy.LocalName(host)
 }

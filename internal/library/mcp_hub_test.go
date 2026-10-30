@@ -524,3 +524,83 @@ func TestHubLink(t *testing.T) {
 		t.Fatal("an app with no install link was given one")
 	}
 }
+
+// A server kept direct (#4382, cuipengcx90) stays each agent's own entry
+// with the hub on, written as with the hub off, beside magpie's for the
+// rest; switching it either way writes the agents again, the entry it had
+// the other way gone, and the hub neither lists nor runs it.
+func TestHubDirectServer(t *testing.T) {
+	h := hubSandbox(t)
+	claude := filepath.Join(h, ".claude.json")
+	write(t, claude, `{"mcpServers": {"mine": {"command": "x"}}}`)
+	codex := filepath.Join(h, ".codex/config.toml")
+	write(t, codex, "")
+	ok(t)(SaveServer("", Server{Name: "index", Transport: "stdio", Command: "npx", Args: []string{"-y", "indexer"}, Env: map[string]string{"K": "v"}, Agents: []string{"claude", "codex"}, Hub: "direct"}))
+	ok(t)(SaveServer("", Server{Name: "web", Transport: "http", URL: "https://example.com/mcp", Agents: []string{"claude", "codex"}, Hub: "shared"}))
+	entries := func(id string) map[string]map[string]any {
+		t.Helper()
+		e, err := targetByID(id).MCP.entries()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return e
+	}
+	names := func(id string) []string {
+		var out []string
+		for k := range entries(id) {
+			out = append(out, k)
+		}
+		slices.Sort(out)
+		return out
+	}
+	off := map[string]string{} // each agent's index entry with the hub off
+	for _, id := range []string{"claude", "codex"} {
+		b, _ := json.Marshal(entries(id)["index"])
+		off[id] = string(b)
+	}
+	if l, err := load(); err != nil || l.server("web").Hub != "" || l.server("index").Hub != HubDirect {
+		t.Fatalf("saved: %v %+v", err, l)
+	}
+
+	ok(t)(SetMCPHub(true))
+	for id, want := range map[string][]string{"claude": {"index", "magpie", "mine"}, "codex": {"index", "magpie"}} {
+		if got := names(id); !slices.Equal(got, want) {
+			t.Fatalf("%s with the hub on: %v, want %v\n%s\n%s", id, got, want, read(t, claude), read(t, codex))
+		}
+		if b, _ := json.Marshal(entries(id)["index"]); string(b) != off[id] {
+			t.Errorf("%s's direct entry %s, with the hub off %s", id, b, off[id])
+		}
+	}
+	for _, id := range []string{"claude", ""} {
+		var got []string
+		for _, s := range hubServers(id) {
+			got = append(got, s.Name)
+		}
+		if !slices.Equal(got, []string{"web"}) {
+			t.Errorf("the hub serves %q: %v, want only web", id, got)
+		}
+	}
+
+	// shared again: behind the hub, its own entry gone
+	ok(t)(ServerHub("index", false))
+	for _, id := range []string{"claude", "codex"} {
+		if got := names(id); slices.Contains(got, "index") || !slices.Contains(got, "magpie") {
+			t.Fatalf("%s with index shared: %v\n%s\n%s", id, got, read(t, claude), read(t, codex))
+		}
+	}
+	// every server direct: the hub's entry goes, each written as with it off
+	ok(t)(ServerHub("index", true))
+	ok(t)(ServerHub("web", true))
+	if got := names("claude"); !slices.Equal(got, []string{"index", "mine", "web"}) {
+		t.Fatalf("claude with every server direct: %v\n%s", got, read(t, claude))
+	}
+	if got := names("codex"); !slices.Equal(got, []string{"index", "web"}) {
+		t.Fatalf("codex with every server direct: %v\n%s", got, read(t, codex))
+	}
+	if _, err := ServerHub("nope", true); err == nil {
+		t.Error("a server not in the library was set")
+	}
+	if _, err := SaveServer("", Server{Name: "odd", Transport: "stdio", Command: "x", Hub: "session"}); err == nil {
+		t.Error("an unknown hub policy was saved")
+	}
+}

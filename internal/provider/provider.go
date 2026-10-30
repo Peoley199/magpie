@@ -327,12 +327,13 @@ type Provider struct {
 	// Azure's own APIs, which take x-api-key alone, ignore it.
 	AuthHeader string `json:"authHeader,omitempty"`
 
-	// Unredacted has requests to a provider on this machine or the local
-	// network (Ollama, LM Studio, a vLLM box) go as the agent wrote them,
-	// unmasked by Settings' redaction, which keeps secrets from vendors
-	// (lc on Discord). It is the user's word, not the address's: a relay
-	// run locally, or Ollama's cloud models, pass a request on to a vendor.
-	// See SkipsRedaction.
+	// Unredacted has requests to a provider go as the agent wrote them,
+	// unmasked by Settings' redaction, which keeps secrets from vendors:
+	// for a model on this machine or the local network (Ollama, LM Studio,
+	// a vLLM box; lc on Discord). It is the user's word, not the
+	// address's (AcMilan on Discord): the editor cautions when an address
+	// isn't local, and a relay run locally, or Ollama's cloud models, pass
+	// a request on to a vendor whatever the address. See SkipsRedaction.
 	Unredacted bool `json:"unredacted,omitempty"`
 
 	// InsecureTLS has magpie take the certificate of the provider's own

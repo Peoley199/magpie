@@ -2316,6 +2316,18 @@ func priceOf(s settings.Settings, p Provider, known bool, model string, at time.
 	return pr, ok
 }
 
+// PriceAt is what a call to model at p costs when made at at, as Usage
+// counts one made then: EffectivePriceAt for p as the caller holds it (a
+// routing group's member), its Peak still set, for the caller to apply
+// with Price.In and tell whether it did. A model served at no cost there
+// (FreeModel) costs nothing.
+func (p Provider) PriceAt(s settings.Settings, model string, at time.Time) (catalog.Price, bool) {
+	if p.FreeModel(model) {
+		return catalog.Price{}, true
+	}
+	return priceOf(s, p, true, model, at)
+}
+
 // tariffOf is a price without a rate window's rate: what the user set
 // for the model as they set it, else the provider's list price, else its
 // maker's, each at the price rate. Either is doubled in the peak hours of

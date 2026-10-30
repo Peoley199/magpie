@@ -135,8 +135,8 @@ const providerUsage = `usage:
                                    (Ollama, LM Studio, oMLX or MLX-Serve on another port or computer: each of its
                                     URLs moves there, keeping its path; address= alone puts it back at the default)
        magpie provider set ollama unmasked=yes
-                                   (a model on this computer or the local network: Settings' redaction leaves its
-                                    requests as written; not for a local relay that passes them on to a vendor)
+                                   (Settings' redaction leaves its requests as written, at any address: your call,
+                                    so mind a relay that passes them on to a vendor; never a signed-in account)
        magpie provider add "My Relay" url=https://relay.example.com/v1 key=sk-… balance=https://relay.example.com/api/usage/token balance.path='$data.total_available / 500000'
        magpie provider set my-relay balance.path='(1 - credits.monthlyCredits / 70) %'
        magpie provider set my-relay balance.method=POST
@@ -840,9 +840,9 @@ func showProvider(p provider.Provider) error {
 		kv("user-agent", "agent's"+muted.Render(why))
 	}
 	if p.Unredacted {
-		why := "  local: Settings' redaction leaves its requests as written"
+		why := "  Settings' redaction leaves its requests as written"
 		if !p.SkipsRedaction() {
-			why = "  but masked: not every address of it is on this computer or the local network"
+			why = "  but masked: a signed-in account, another magpie or no address"
 		}
 		kv("unmasked", "yes"+muted.Render(why))
 	}
@@ -1182,9 +1182,9 @@ func applyPairs(p *provider.Provider, pairs []string) error {
 				return fmt.Errorf("compaction=native|magpie, not %q", v)
 			}
 		case "unmasked":
-			// yes: a model on this computer or the local network gets the
-			// requests as written, unmasked by Settings' redaction (lc on
-			// Discord); only while every address of it is local
+			// yes: the provider gets the requests as written, unmasked by
+			// Settings' redaction (lc, AcMilan on Discord): the user's word
+			// at any address, never for an account or another magpie
 			// (provider.SkipsRedaction)
 			if v != "yes" && v != "no" {
 				return fmt.Errorf("unmasked=yes|no, not %q", v)
@@ -1204,8 +1204,10 @@ func applyPairs(p *provider.Provider, pairs []string) error {
 			if err != nil {
 				return err
 			}
-			if r == provider.Manual {
-				return fmt.Errorf("routing=manual is a group's: a provider's keys or accounts are routed smart, order, rotate, usage, pace, weight, free or fast")
+			if r == provider.Manual || r == provider.Cheapest {
+				// cheap: its keys and accounts all bill the provider's one
+				// price, so there is nothing to weigh
+				return fmt.Errorf("routing=%s is a group's: a provider's keys or accounts are routed smart, order, rotate, usage, pace, weight, free or fast", r)
 			}
 			p.Routing = r
 		case "icon":

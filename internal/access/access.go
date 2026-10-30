@@ -541,6 +541,28 @@ func Authenticate(secret string) (Identity, bool) {
 	return Identity{}, false
 }
 
+// On: the key with this id is one Authenticate takes, in the store and not
+// turned off, or the legacy sharing key not yet written there; false when
+// the store can't be read.
+func On(id string) bool {
+	mu.Lock()
+	defer mu.Unlock()
+	keys, err := load()
+	if err != nil || id == "" {
+		return false
+	}
+	for _, k := range keys {
+		if k.ID == id {
+			return !k.Off && k.Secret != ""
+		}
+	}
+	s := settings.Load()
+	if s.LAN && s.LANKeyID == "" && s.LANKey != "" && !strings.HasPrefix(s.LANKey, revokedLANPrefix) && !slices.ContainsFunc(keys, func(k Key) bool { return k.LAN }) {
+		return legacyLANKey(s.LANKey).ID == id
+	}
+	return false
+}
+
 func legacyLANKey(secret string) Key {
 	// The fallback and eventual persisted key must share their usage identity.
 	sum := sha256.Sum256([]byte(secret))

@@ -3,6 +3,10 @@
 magpie.strings({
   zh: {
     "This computer only": "只在这台电脑",
+    "Not through the hub": "不经过聚合",
+    "Each agent is given its own entry for it, as with the MCP hub off": "每个 Agent 各自有它的条目，和关掉 MCP 聚合时一样",
+    "Through the MCP hub": "经过 MCP 聚合",
+    "Off gives each agent its own entry for it, as with the hub off: for a server that reads its project from the folder it starts in, or keeps a session's state": "关掉后，每个 Agent 各自有它的条目，和关掉聚合时一样：适合从启动目录读取项目、或保存会话状态的服务器",
     "Sync never carries it to your other computers": "同步不会把它带到你的其他电脑",
     "Sync never carries it to your other computers, and a sync from them neither removes it nor puts theirs in its place": "同步不会把它带到你的其他电脑；其他电脑同步过来时，既不会删掉它，也不会用它们的同名服务器替换它",
     "Move into the library": "移入资源库",
@@ -734,6 +738,10 @@ magpie.strings({
   },
   "zh-TW": {
     "This computer only": "只在這台電腦",
+    "Not through the hub": "不經過聚合",
+    "Each agent is given its own entry for it, as with the MCP hub off": "每個 Agent 各自有它的條目，和關掉 MCP 聚合時一樣",
+    "Through the MCP hub": "經過 MCP 聚合",
+    "Off gives each agent its own entry for it, as with the hub off: for a server that reads its project from the folder it starts in, or keeps a session's state": "關掉後，每個 Agent 各自有它的條目，和關掉聚合時一樣：適合從啟動目錄讀取專案、或保存工作階段狀態的伺服器",
     "Sync never carries it to your other computers": "同步不會把它帶到你的其他電腦",
     "Sync never carries it to your other computers, and a sync from them neither removes it nor puts theirs in its place": "同步不會把它帶到你的其他電腦；其他電腦同步過來時，既不會刪掉它，也不會用它們的同名伺服器取代它",
     "Move into the library": "移入資源庫",
@@ -1465,6 +1473,10 @@ magpie.strings({
   },
   ja: {
     "This computer only": "このコンピュータだけ",
+    "Not through the hub": "ハブを通さない",
+    "Each agent is given its own entry for it, as with the MCP hub off": "各エージェントに個別のエントリを渡します（MCP ハブがオフのときと同じ）",
+    "Through the MCP hub": "MCP ハブを通す",
+    "Off gives each agent its own entry for it, as with the hub off: for a server that reads its project from the folder it starts in, or keeps a session's state": "オフにすると、各エージェントに個別のエントリを渡します（ハブがオフのときと同じ）。起動したフォルダからプロジェクトを読むサーバーや、セッションの状態を持つサーバー向けです",
     "Sync never carries it to your other computers": "同期でほかのコンピュータには送られません",
     "Sync never carries it to your other computers, and a sync from them neither removes it nor puts theirs in its place": "同期でほかのコンピュータには送られません。ほかのコンピュータからの同期で削除されたり、同じ名前のサーバーに置き換えられたりすることもありません",
     "Move into the library": "ライブラリへ移す",
@@ -2196,6 +2208,10 @@ magpie.strings({
   },
   de: {
     "This computer only": "Nur dieser Computer",
+    "Not through the hub": "Nicht über den Hub",
+    "Each agent is given its own entry for it, as with the MCP hub off": "Jeder Agent bekommt einen eigenen Eintrag dafür, wie bei ausgeschaltetem MCP-Hub",
+    "Through the MCP hub": "Über den MCP-Hub",
+    "Off gives each agent its own entry for it, as with the hub off: for a server that reads its project from the folder it starts in, or keeps a session's state": "Aus bekommt jeder Agent einen eigenen Eintrag dafür, wie bei ausgeschaltetem Hub: für einen Server, der sein Projekt aus dem Ordner liest, in dem er startet, oder den Zustand einer Sitzung hält",
     "Sync never carries it to your other computers": "Die Synchronisierung bringt ihn nicht auf deine anderen Computer",
     "Sync never carries it to your other computers, and a sync from them neither removes it nor puts theirs in its place": "Die Synchronisierung bringt ihn nicht auf deine anderen Computer, und eine Synchronisierung von dort entfernt ihn weder noch ersetzt sie ihn durch ihren gleichnamigen Server",
     "Move into the library": "In die Bibliothek verschieben",

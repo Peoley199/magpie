@@ -60,6 +60,23 @@ func TestLibraryMCPHub(t *testing.T) {
 	if got := names(); !slices.Equal(got, []string{"magpie"}) {
 		t.Fatalf("after a word it doesn't know: %v", got)
 	}
+	// a server kept direct (#4382) is its own entry again, beside no hub
+	// entry once no server is behind it; shared, behind the hub again
+	if err := libraryCmd([]string{"library", "mcp", "hub", "fs", "direct"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := names(); !slices.Equal(got, []string{"fs"}) {
+		t.Fatalf("fs direct: %v", got)
+	}
+	if err := libraryCmd([]string{"library", "mcp", "hub", "fs", "solo"}); err == nil || !strings.Contains(err.Error(), "usage") {
+		t.Fatalf("hub fs solo: %v", err)
+	}
+	if err := libraryCmd([]string{"library", "mcp", "hub", "fs", "shared"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := names(); !slices.Equal(got, []string{"magpie"}) {
+		t.Fatalf("fs shared: %v", got)
+	}
 	if err := libraryCmd([]string{"library", "mcp", "hub", "off"}); err != nil {
 		t.Fatal(err)
 	}

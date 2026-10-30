@@ -28,6 +28,7 @@ import (
 	"github.com/yetone/magpie/internal/catalog"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/routes"
+	"github.com/yetone/magpie/internal/settings"
 	"github.com/yetone/magpie/internal/usage"
 )
 
@@ -1769,6 +1770,22 @@ type weighing struct {
 	// be two models on one key): filled only when the routing weighs by
 	// it (routes.Strategy.BySpeed)
 	speed map[string][2]float64
+
+	// price is what each seat's model costs at the request's time, by
+	// restID (a group's heads can be two models on one key): filled only
+	// when the routing weighs by it (routes.Strategy.ByPrice)
+	price map[string]seatPrice
+}
+
+// seatPrice is a seat's price at the request's time, as Cheapest weighed
+// it and the trace tells it: a million tokens in and a million out, and
+// whether that is its vendor's peak-hour price.
+// priceClock is the hour Cheapest prices at; a test holds it.
+var priceClock = time.Now
+
+type seatPrice struct {
+	in, out, cache float64
+	peak           bool
 }
 
 type allowanceKey struct {
@@ -1933,6 +1950,22 @@ func weighRouted(p provider.Provider, cs []candidate, model string, from provide
 		for i, c := range cs {
 			seats[i].TTFT, seats[i].TPS = speedOf(c, now)
 			wg.speed[c.restID()] = [2]float64{seats[i].TTFT, seats[i].TPS}
+		}
+	}
+	if st.ByPrice {
+		// priced as Usage would count a call made now: the hour decides
+		// a peak-billed vendor's price and a rate window's (provider.PriceAt)
+		set, at := settings.Shared(), priceClock()
+		wg.price = map[string]seatPrice{}
+		for i, c := range cs {
+			pr, ok := c.p.PriceAt(set, c.model, at)
+			if !ok {
+				continue
+			}
+			peak := pr.Peak.At(at)
+			pr = pr.In(at)
+			seats[i].Priced, seats[i].Cost, seats[i].CacheCost = true, pr.Input+pr.Output, pr.CacheRead
+			wg.price[c.restID()] = seatPrice{in: pr.Input, out: pr.Output, cache: pr.CacheRead, peak: peak}
 		}
 	}
 	order := routes.Apply(st, p.ID, seats)
