@@ -5,14 +5,17 @@ import (
 	"cmp"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	"os"
+	"reflect"
 	"runtime"
 	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -162,7 +165,7 @@ func sessionRoutes(mux *http.ServeMux, w Windows) {
 	mux.HandleFunc("GET /api/sessions/stats", func(rw http.ResponseWriter, r *http.Request) {
 		defer sessions.ShareListing()()
 		n, _ := strconv.Atoi(r.URL.Query().Get("days"))
-		st := statsFor(n)
+		st, gen := statsForGen(n)
 		names := map[string]string{}
 		for _, a := range agent.Clients() {
 			names[a.ID] = a.SharedName()
@@ -176,10 +179,29 @@ func sessionRoutes(mux *http.ServeMux, w Windows) {
 				agents[a.Agent] = cmp.Or(names[a.Agent], a.Agent)
 			}
 		}
-		writeJSONSame(rw, r, struct {
+		// the page has this very answer: told so without encoding and
+		// hashing a long history's ~6 MB of it again on every poll (#2278)
+		statsTags.Lock()
+		t, ok := statsTags.m[n]
+		statsTags.Unlock()
+		if ok && t.gen == gen && maps.Equal(t.agents, agents) && r.Header.Get("X-Magpie-Had") == t.tag {
+			rw.Header().Set("X-Magpie-Tag", t.tag)
+			rw.Header().Set("X-Magpie-Same", "1")
+			rw.WriteHeader(http.StatusOK)
+			return
+		}
+		tag := writeJSONSame(rw, r, struct {
 			sessions.Stats
 			Agents map[string]string `json:"agents"`
 		}{st, agents})
+		if tag != "" {
+			statsTags.Lock()
+			if statsTags.m == nil || len(statsTags.m) >= statsMemoMost {
+				statsTags.m = map[int]statsTag{}
+			}
+			statsTags.m[n] = statsTag{gen, agents, tag}
+			statsTags.Unlock()
+		}
 	})
 	// overview sums up the range's sessions under the page's filters:
 	// how many, what the middle one spent, how many each day, and the ones
@@ -462,6 +484,7 @@ var statsMemo struct {
 type statsKept struct {
 	at   time.Time
 	st   sessions.Stats
+	gen  uint64 // st's, new only when a read found st changed
 	busy bool
 	// used is the memo's ask count when this range was last asked: a count,
 	// not a clock, since Windows' clock can give two asks the same time.
@@ -473,7 +496,36 @@ type statsKept struct {
 // least recently asked one is let go when a new value comes past it.
 const statsMemoMost = 8
 
+// statsGen numbers each Stats the memo keeps, across memos: an answer's
+// tag is known by it (statsTags).
+var statsGen atomic.Uint64
+
+// statsTags is the tag of the stats answer last sent for each ?days, the
+// Stats it was made from known by its gen.
+var statsTags struct {
+	sync.Mutex
+	m map[int]statsTag
+}
+
+type statsTag struct {
+	gen    uint64
+	agents map[string]string
+	tag    string
+}
+
+// sameStats is whether a and b would be sent the same: a read again
+// behind finds the same stats most times, and keeping a's gen spares the
+// page's next ask the encoding.
+func sameStats(a, b sessions.Stats) bool {
+	return a.From == b.From && a.To == b.To && slices.Equal(a.Keys, b.Keys) && reflect.DeepEqual(a.Days, b.Days)
+}
+
 func statsFor(days int) sessions.Stats {
+	st, _ := statsForGen(days)
+	return st
+}
+
+func statsForGen(days int) (sessions.Stats, uint64) {
 	days = max(0, days)
 	statsMemo.Lock()
 	if k := statsMemo.m[days]; k != nil {
@@ -500,17 +552,20 @@ func statsFor(days int) sessions.Stats {
 				sts := combinedSessionStatsAll(ranges)
 				statsMemo.Lock()
 				for i, o := range kept {
-					o.at, o.st, o.busy = time.Now(), sts[i], false
+					if !sameStats(o.st, sts[i]) {
+						o.st, o.gen = sts[i], statsGen.Add(1)
+					}
+					o.at, o.busy = time.Now(), false
 				}
 				statsMemo.Unlock()
 			}()
 		}
-		st := k.st
+		st, gen := k.st, k.gen
 		statsMemo.Unlock()
-		return st
+		return st, gen
 	}
 	statsMemo.Unlock()
-	st := combinedSessionStats(days)
+	st, gen := combinedSessionStats(days), statsGen.Add(1)
 	statsMemo.Lock()
 	if statsMemo.m == nil {
 		statsMemo.m = map[int]*statsKept{}
@@ -526,10 +581,10 @@ func statsFor(days int) sessions.Stats {
 			delete(statsMemo.m, oldest)
 		}
 		statsMemo.asks++
-		statsMemo.m[days] = &statsKept{at: time.Now(), st: st, used: statsMemo.asks}
+		statsMemo.m[days] = &statsKept{at: time.Now(), st: st, gen: gen, used: statsMemo.asks}
 	}
 	statsMemo.Unlock()
-	return st
+	return st, gen
 }
 
 func combinedSessionStats(days int) sessions.Stats {

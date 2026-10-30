@@ -1455,7 +1455,7 @@ func listSessions(limit int) []Session {
 	defer useDBs()()
 	files := allFiles()
 	groups := byKey(files, nil)
-	latest := map[string]time.Time{}
+	latest := make(map[string]time.Time, len(groups))
 	for _, f := range files {
 		if f.mod.After(latest[f.key]) {
 			latest[f.key] = f.mod
@@ -1485,7 +1485,8 @@ func listSessions(limit int) []Session {
 	copyIDs := copiesByKeeper(copies, groups)
 
 	price, titles := pricer(), codexTitleOf()
-	out := []Session{}
+	// made for the page at once, not grown an append at a time (#2278)
+	out := make([]Session, 0, min(limit, len(keys)))
 	for _, k := range keys {
 		if copies[k] != "" {
 			continue

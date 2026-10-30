@@ -2703,11 +2703,12 @@ func writeJSON(rw http.ResponseWriter, v any) {
 // history's ~8 MB list and ~0.7 MB of stats every 15 s, and parsed and
 // compared them whole to find them the same. Not an ETag and a 304:
 // WebView2 is sent no If-None-Match, and Wails turns its 304 into a 505.
-func writeJSONSame(rw http.ResponseWriter, r *http.Request, v any) {
+// It returns the tag, or "" when v could not be written.
+func writeJSONSame(rw http.ResponseWriter, r *http.Request, v any) string {
 	var b bytes.Buffer
 	if err := json.NewEncoder(&b).Encode(v); err != nil {
 		fail(rw, err)
-		return
+		return ""
 	}
 	sum := sha256.Sum256(b.Bytes())
 	tag := hex.EncodeToString(sum[:16])
@@ -2715,10 +2716,11 @@ func writeJSONSame(rw http.ResponseWriter, r *http.Request, v any) {
 	if r.Header.Get("X-Magpie-Had") == tag {
 		rw.Header().Set("X-Magpie-Same", "1")
 		rw.WriteHeader(http.StatusOK)
-		return
+		return tag
 	}
 	rw.Header().Set("Content-Type", "application/json")
 	_, _ = rw.Write(b.Bytes())
+	return tag
 }
 
 // sentRows is each row's hash in the last few lists writeJSONRows sent, by

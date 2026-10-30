@@ -176,6 +176,18 @@ func MergeExternalStats(st Stats, days []ExternalDayUsage, external []ExternalSe
 		}
 	}
 	names := desktopExternalTitles(external)
+	// grown once for every external: a Clip and then an append a session
+	// copied the whole list again and again, ~110 MB a minute of polls on a
+	// full history (#2278)
+	n := 0
+	for _, e := range external {
+		if e.ID != "" && e.Agent != "" {
+			n++
+		}
+	}
+	if n > 0 {
+		st.Sessions, sessionsOwn = slices.Grow(slices.Clip(st.Sessions), n), true
+	}
 	for _, e := range external {
 		if e.ID == "" || e.Agent == "" {
 			continue
@@ -206,9 +218,6 @@ func MergeExternalStats(st Stats, days []ExternalDayUsage, external []ExternalSe
 		for _, m := range e.Models {
 			s.Models = append(s.Models, m.Model)
 			s.Priced = s.Priced && m.Priced
-		}
-		if !sessionsOwn {
-			st.Sessions, sessionsOwn = slices.Clip(st.Sessions), true
 		}
 		st.Sessions = append(st.Sessions, s)
 	}
