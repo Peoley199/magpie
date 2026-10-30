@@ -92,6 +92,18 @@ remove），3 个"仅合并头红"。这三个都**在纯上游 `f7f2d75f2` 上�
 又有文档提交，`HEAD^1` 就成了合并提交本身，基线代码与合并头相同，于是 57 个红里只"认出" 15 个。
 现在基线取"最后一次合并的第一个父提交"（或第二个参数指定）。
 
+### 10-31 第二轮（f7f2d75f→v0.1.2244，11 提交；12 包 59 红，0 回归）
+
+自动跑完 `--yes --push --install`。三个"仅合并头红"全部排除：
+
+| 测试 | 现象 | 结论 |
+| --- | --- | --- |
+| `TestT3CodeCodexInstance` | `CreateFile …\T3 "a" $b\userdata\settings.json: The filename … is incorrect` | 上游新测试（d6beb9975）用了 Windows 非法文件名字符；**纯上游树同样红** |
+| `TestCodexModelEffortLetsUnrelatedCallsGo` | `a build allocated 566400 bytes, the log's rows are 552184` | 字节上限型断言，满套件负载下 sync.Pool 不保留缓冲；**单跑与整包跑都过**（LESSONS #3472 同类） |
+| `TestLibraryMCPHub` | `TempDir RemoveAll cleanup: … used by another process` | npm 进程仍持有文件；**两棵树上单跑都过**，只在满套件里红 |
+
+其余 56 个签名与基线一致、1 个同类签名变化（Windows rename 文件锁）。结论仍是 0 回归。
+
 ## 四、远端仓库的处理
 
 - **推送**：`git push origin main`，永远是 fast-forward（合并方式保证不改写历史）。禁止 rebase
