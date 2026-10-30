@@ -153,6 +153,16 @@ type Agent struct {
 	// rather than asking the gateway, rewrites that list as the catalog is
 	// now — where magpie wrote one; nothing else changes (see SyncCatalog).
 	Sync func() error
+	// ListOnly: Sync does nothing but bring a block of magpie's name in the
+	// agent's files up to the catalog. A catalog sync runs it only while
+	// the agent is connected (Wired), as its switch on the Agents page
+	// says: switched off, nothing of magpie's writes its files. A custom
+	// provider the user named magpie in the agent, with a few models picked
+	// by hand (yyddbds on Discord, Xiaomi MiMo), was written over with the
+	// whole catalog at every start. A list magpie wrote while connected
+	// waits, while the agent runs a model of its own, until a model of
+	// magpie's is picked again.
+	ListOnly bool
 	// Unwire, for an agent whose fields' default is the agent as installed
 	// rather than what it had before magpie (Codex, Claude Code, Gemini
 	// CLI), takes magpie out of its config and puts back what the stash

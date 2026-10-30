@@ -159,11 +159,15 @@ func (p Provider) ListedAPIs(model string) []Protocol {
 			return apis
 		}
 	}
-	// Vertex AI serves Gemini on generateContent, and its partner models
-	// (publisher/model) on chat completions alone
+	// Vertex AI serves Gemini on generateContent, its partner models
+	// (publisher/model) on chat completions alone, and Claude on
+	// Anthropic's Messages API alone
 	if p.IsVertex() {
 		if VertexPartner(model) {
 			return []Protocol{Chat}
+		}
+		if VertexClaude(model) {
+			return []Protocol{Anthropic}
 		}
 		return []Protocol{Gemini}
 	}

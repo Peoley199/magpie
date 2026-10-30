@@ -71,10 +71,10 @@ func (p Provider) Test(ctx context.Context) []Result {
 	}
 	var out []Result
 	for _, proto := range p.Speaks() {
-		if p.IsVertex() && proto == Chat {
-			// a partner model answers only once the project has turned it
-			// on in Model Garden: the provider is tested on Gemini, and a
-			// partner model by its own test (TestModel)
+		if p.IsVertex() && (proto == Chat || proto == Anthropic) {
+			// a partner model, and Claude, answer only once the project
+			// has turned them on in Model Garden: the provider is tested
+			// on Gemini, and such a model by its own test (TestModel)
 			continue
 		}
 		q, ok := p.keyFor(proto)
@@ -197,13 +197,22 @@ func (p Provider) mantleBase(base, model string) string {
 func tinyBody(q Provider, proto Protocol, model string) (url, body string) {
 	switch proto {
 	case Chat:
-		if q.IsBedrock() || q.IsAzure() {
+		if q.IsBedrock() || q.IsAzure() || OpenAIHost(HostOf(q.Base(Chat))) {
+			// OpenAI's own API, Azure's and Bedrock's turn max_tokens away
+			// on their reasoning models (GoxxKintBlade on X: every model
+			// of an OpenAI key red, "Use 'max_completion_tokens' instead")
 			return q.mantleBase(q.Chat, model) + "/chat/completions", fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"hi"}],"max_completion_tokens":16}`, model)
 		}
 		return q.Base(Chat) + "/chat/completions", fmt.Sprintf(`{"model":%q,"messages":[{"role":"user","content":"hi"}],"max_tokens":16}`, model)
 	case Responses:
 		return q.mantleBase(q.Responses, model) + "/responses", fmt.Sprintf(`{"model":%q,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}],"max_output_tokens":16}`, model)
 	case Anthropic:
+		if q.IsVertex() {
+			// Claude at the project, as Anthropic's Vertex SDK asks it
+			// (VertexClaudeRequest)
+			at, b, _ := VertexClaudeRequest("/v1/messages", fmt.Appendf(nil, `{"model":%q,"max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`, model))
+			return q.Base(Anthropic) + at, string(b)
+		}
 		return q.Anthropic + "/v1/messages", fmt.Sprintf(`{"model":%q,"max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`, model)
 	case Gemini:
 		if q.IsVertex() {
@@ -557,7 +566,21 @@ func (p Provider) ownRequests(ctx context.Context, kind string) context.Context 
 // it: the vendor's error, a stream's error after its 200 too. Do would
 // write the status alone, so a failed test's row said nothing of why
 // (ysm119 on Discord: "no answer", and no error to find anywhere).
-func probe(ctx context.Context, p Provider, proto Protocol, url string, body []byte, model string, wait time.Duration) (r Result) {
+func probe(ctx context.Context, p Provider, proto Protocol, url string, body []byte, model string, wait time.Duration) Result {
+	r := probeOnce(ctx, p, proto, url, body, model, wait)
+	if proto == Chat && r.Status == http.StatusBadRequest {
+		// a vendor whose 400 names the other reply-length field as the
+		// one to send (a relay in front of OpenAI's reasoning models, or
+		// one that reads max_tokens alone) is asked once more with it, as
+		// the gateway asks it (forward)
+		if b, ok := WithTokenField(body, TokenFieldWanted([]byte(r.Error))); ok {
+			return probeOnce(ctx, p, proto, url, b, model, wait)
+		}
+	}
+	return r
+}
+
+func probeOnce(ctx context.Context, p Provider, proto Protocol, url string, body []byte, model string, wait time.Duration) (r Result) {
 	r = Result{Protocol: proto, Model: model}
 	if model == "" {
 		r.Error = "no model to try: expose one, or refresh the model list"

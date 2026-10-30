@@ -45,7 +45,13 @@ func MergeExternal(native []Session, external []ExternalSession) []Session {
 		if s.Agent == "raft" {
 			seen[agentID{"pi", s.ID}] = struct{}{}
 		}
+		if s.App != "" {
+			seen[agentID{s.App, s.ID}] = struct{}{}
+		}
 		for _, id := range s.Copies {
+			seen[agentID{s.Agent, id}] = struct{}{}
+		}
+		for _, id := range s.Subs {
 			seen[agentID{s.Agent, id}] = struct{}{}
 		}
 	}

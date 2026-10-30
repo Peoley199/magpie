@@ -26,6 +26,7 @@ The gateway can't import the library (the library imports the gateway), so the g
    Another app does the same at `/mcp/magpie/hub`, under the same guard: from another computer it needs a gateway key, as every LAN request does.
 3. `tools/call` finds the tool by its hub name in the same list, holds it to the key's limit, and calls `Call` under `hubCallWait` (50s, under the 60s an MCP client gives a call). The server's result goes back as it gave it.
 4. An error comes back as `isError` text naming the server: `The MCP server S couldn't run T: <why>`, where why is how it exited and its last line on stderr, a sign-in it needs, its command not found, or `it didn't answer in 50s`.
+5. Each call is a row of the request log (`serveMCP`'s `callMCPTool`): the hub's tool name, the Library server as its host, the agent of the path, how long it took and its error, never its arguments. It counts in no total ([Calls to magpie's own MCP tools](gateway-sessions.md#calls-to-magpies-own-mcp-tools)).
 
 ## Constraints and failure behavior
 
@@ -35,13 +36,14 @@ The gateway can't import the library (the library imports the gateway), so the g
 - A call that times out leaves the server running for the next; a server that died is started again. A server that can't be started is an error on each call, not a retry loop.
 - Every process the hub starts is in a `proc` tree magpie ends when the switch goes off, the server is edited, it has been idle, or the gateway stops. A test ends them in cleanup (`hubSandbox`).
 - A gateway key holder on the LAN reaches the Library's command servers through the hub while it is on, as they reach plugin tools. They run with the user's rights on this computer.
+- A tools plugin's server (`plugin` set, [Plugin tools](plugin-tools.md)) is behind the hub as any server is, but its tools are listed and run in this process through the plugin host, not over its URL, and they aren't cached: the host has them.
 - The tools a server listed are cached until it says they changed, it is edited, or the switch is turned off. A server that changes its tools without saying so shows them after one of those.
 
 ## Verification
 
 ```sh
 go test -tags nogui ./internal/gui -run TestHubOpen
-go test -tags nogui ./internal/library -run 'TestHub|TestFakeMCPServer|TestCheck'
+go test -tags nogui ./internal/library -run 'TestHub|TestFakeMCPServer|TestCheck|TestPluginTools'
 go test -tags nogui ./internal/gateway -run 'HubMCP|OwnMCPRejects' -timeout 45m
 go test -tags nogui ./internal/cli -run TestLibraryMCPHub
 node --test internal/gui/tests/library-mcp-hub.test.cjs

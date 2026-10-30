@@ -373,6 +373,9 @@ type settingsJSON struct {
 	// Builtins are the built-in plugins: each one's switch, whether it
 	// runs and what of it is in use (builtins.go)
 	Builtins []builtinJSON `json:"builtins"`
+	// PanelKeys is whether the quick panel's shortcut can be set here
+	// (panelkey.go)
+	PanelKeys panelKeysJSON `json:"panelKeys"`
 	// JSRoutings are the routings JS gateway plugins serve now
 	// ("<plugin>/<name>"), for the routing pickers
 	JSRoutings []middleware.Routing `json:"jsRoutings"`
@@ -640,6 +643,7 @@ func settingsState() settingsJSON {
 	s := settingsJSON{Settings: settings.Load(), Version: Version, Dir: tilde(settings.Dir()), Portable: settings.Portable() != "", Gateway: gateway.URL()}
 	s.AddrEnv = os.Getenv("MAGPIE_ADDR")
 	s.Builtins = builtinsState()
+	s.PanelKeys = panelKeysState()
 	s.JSRoutings = middleware.Routings()
 	s.OnNetwork = gateway.OnNetwork()
 	if list, env := gateway.AllowIPs(); env {
@@ -1351,7 +1355,7 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 			in.MaskAlert = cur.MaskAlert
 		}
 		in.AgentOrder, in.AgentsHidden, in.AgentsShown = cur.AgentOrder, cur.AgentsHidden, cur.AgentsShown
-		in.Window, in.WindowMaximised = cur.Window, cur.WindowMaximised // the window's own, as it was last resized
+		in.Window, in.WindowMaximised, in.WindowAt = cur.Window, cur.WindowMaximised, cur.WindowAt // the window's own, as it was last resized and moved
 		// and what other pages keep here: which models an agent is shown, and
 		// everything the user said of a model anywhere else in the app, set on
 		// its own. The per-model maps are carried whole rather than named one
@@ -1445,6 +1449,8 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		in.CodexWarmAtOf = cur.CodexWarmAtOf
 		// and the text size, which the keyboard changes too (text-size below)
 		in.TextSize = cur.TextSize
+		// and the quick panel's shortcut, set on its own (panel-shortcut below)
+		in.PanelShortcut = cur.PanelShortcut
 		// the Dock choice's reading, which the page never sets: the file's
 		// as read (settings.DockSettled), so a save from the page doesn't
 		// read its With window as an older file's Hide
@@ -1492,10 +1498,11 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		}
 		// the cards the menu bar shows, any of them (TrayUsage is only the first),
 		// how often, with their logos or not, beside the bird or not, and
-		// with their Pace numbers or not, with magpie's totals' cost or not
+		// with their Pace numbers or not, with magpie's totals' cost or not, and
+		// which of each subscription's windows
 		if (!slices.Equal(settings.Load().TrayUsages, cur.TrayUsages) || in.TrayUsageEvery != cur.TrayUsageEvery ||
 			in.TrayNoLogos != cur.TrayNoLogos || in.TrayNoBird != cur.TrayNoBird || in.TrayPace != cur.TrayPace ||
-			in.TrayNoCost != cur.TrayNoCost) && onTrayUsage != nil {
+			in.TrayNoCost != cur.TrayNoCost || !maps.EqualFunc(in.TrayWindows, cur.TrayWindows, slices.Equal)) && onTrayUsage != nil {
 			onTrayUsage()
 		}
 		// an alert turned on or moved is looked at now, the Mac asked for its
@@ -2116,6 +2123,41 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		}
 		writeJSON(rw, settingsState())
 	})
+	// the quick panel's shortcut (panelkey.go): bound in the app first, so
+	// one the system refuses is said and not saved, the one before kept
+	mux.HandleFunc("POST /api/settings/panel-shortcut", func(rw http.ResponseWriter, r *http.Request) {
+		var in struct{ Shortcut string }
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(rw, err)
+			return
+		}
+		key, err := panelShortcut(in.Shortcut, runtime.GOOS)
+		if err != nil {
+			fail(rw, err)
+			return
+		}
+		s := settings.Load()
+		if key != "" && !panelKeysState().Can {
+			fail(rw, errors.New("This desktop doesn't let apps take a shortcut"))
+			return
+		}
+		if onPanelShortcut != nil {
+			if err := onPanelShortcut(key); err != nil {
+				fail(rw, err)
+				return
+			}
+		}
+		was := s.PanelShortcut
+		s.PanelShortcut = key
+		if err := settings.Save(s); err != nil {
+			if onPanelShortcut != nil {
+				_ = onPanelShortcut(was) // the saved one bound again
+			}
+			fail(rw, err)
+			return
+		}
+		writeJSON(rw, settingsState())
+	})
 	// the Agents page's order and what it folds away, in magpie's settings
 	mux.HandleFunc("POST /api/agents/arrange", func(rw http.ResponseWriter, r *http.Request) {
 		var in struct{ Order, Hidden, Shown []string }
@@ -2705,8 +2747,15 @@ func writeJSON(rw http.ResponseWriter, v any) {
 // WebView2 is sent no If-None-Match, and Wails turns its 304 into a 505.
 // It returns the tag, or "" when v could not be written.
 func writeJSONSame(rw http.ResponseWriter, r *http.Request, v any) string {
-	var b bytes.Buffer
-	if err := json.NewEncoder(&b).Encode(v); err != nil {
+	return writeSame(rw, r, func(b *bytes.Buffer) error { return json.NewEncoder(b).Encode(v) })
+}
+
+// writeSame is writeJSONSame of the answer write puts in b, a kept buffer
+// (answerBuffer).
+func writeSame(rw http.ResponseWriter, r *http.Request, write func(b *bytes.Buffer) error) string {
+	b := answerBuffer()
+	defer keepAnswer(b)
+	if err := write(b); err != nil {
 		fail(rw, err)
 		return ""
 	}
@@ -2734,6 +2783,52 @@ var sentRows struct {
 
 const sentRowsKept = 4
 
+// answerBuffers are the buffers a long answer is written in, kept between
+// polls: grown from nothing for each, the Sessions tab's list and its
+// stats, ~6 MB each, were ~110 MB of 90 s of polls while an agent worked
+// (#2278). They go answerLinger after the last answer.
+var answerBuffers struct {
+	sync.Mutex
+	free []*bytes.Buffer
+	t    *time.Timer
+}
+
+const answerBuffersKept = 2
+
+var answerLinger = 30 * time.Second
+
+// answerBuffer is a kept buffer, empty, or a new one
+func answerBuffer() *bytes.Buffer {
+	answerBuffers.Lock()
+	defer answerBuffers.Unlock()
+	if n := len(answerBuffers.free); n > 0 {
+		b := answerBuffers.free[n-1]
+		answerBuffers.free = answerBuffers.free[:n-1]
+		return b
+	}
+	return new(bytes.Buffer)
+}
+
+// keepAnswer puts b back once its answer is written: nothing reads it
+// after, a ResponseWriter copies what it is given.
+func keepAnswer(b *bytes.Buffer) {
+	b.Reset()
+	answerBuffers.Lock()
+	defer answerBuffers.Unlock()
+	if len(answerBuffers.free) < answerBuffersKept {
+		answerBuffers.free = append(answerBuffers.free, b)
+	}
+	if answerBuffers.t == nil {
+		answerBuffers.t = time.AfterFunc(answerLinger, func() {
+			answerBuffers.Lock()
+			answerBuffers.free = nil
+			answerBuffers.Unlock()
+		})
+		return
+	}
+	answerBuffers.t.Reset(answerLinger)
+}
+
 // rowsSize is the size of the last answer writeJSONRows wrote of each key,
 // what the next one's buffer is made for.
 var rowsSize sync.Map
@@ -2755,14 +2850,15 @@ func writeJSONRows[T any](rw http.ResponseWriter, r *http.Request, key string, r
 	// the rows are written once, into the answer itself: each row's
 	// Marshal, their Join and the answer's buffer were three copies of the
 	// ~8 MB list a poll, and the buffer grew to it from nothing
-	var whole bytes.Buffer
+	whole := answerBuffer()
+	defer keepAnswer(whole)
 	if n, ok := rowsSize.Load(key); ok {
 		whole.Grow(n.(int) + n.(int)/8)
 	}
 	whole.WriteByte('{')
 	whole.Write(k)
 	whole.WriteString(":[")
-	enc := json.NewEncoder(&whole)
+	enc := json.NewEncoder(whole)
 	ends := make([]int, len(rows)+1)
 	ends[0] = whole.Len()
 	for i := range rows {
@@ -2787,7 +2883,7 @@ func writeJSONRows[T any](rw http.ResponseWriter, r *http.Request, key string, r
 		}
 		b.WriteByte('\n')
 	}
-	end(&whole)
+	end(whole)
 	rowsSize.Store(key, whole.Len())
 	all := whole.Bytes()
 	raw := make([][]byte, len(rows))

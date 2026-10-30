@@ -80,7 +80,7 @@ function fixture(lang, theme, events, options = {}) {
       let key = keys.find((k) => k.id === lanKeyID);
       if (lan && (!key || body.newKey)) {
         if (!key) {
-          key = { id: "lan-key-" + (++serial), name: "Magpie" };
+          key = { id: "lan-key-" + (++serial), name: "Magpie", lan: true };
           lanKeyID = key.id;
           keys.push(key);
         }
@@ -169,6 +169,7 @@ function fixture(lang, theme, events, options = {}) {
       if (action === "models-key") k.models = body.models?.length ? body.models : undefined;
       if (action === "accounts-key") k.accounts = body.accounts?.length ? body.accounts : undefined;
       if (action === "quotas-key") k.quotas = body.quotas || undefined;
+      if (action === "access-key") k.readOnly = body.readOnly || undefined;
       if (action === "copy-key") secret = k.id === lanKeyID ? lanSecret : secrets.get(k.id);
       return json({ keys, secret });
     }

@@ -156,9 +156,13 @@ func unforbid(f forbidden) {
 // a provider rest or after a model-specific rest.
 func clearRest(key string) {
 	restingUntil.Lock()
+	kept := ladderRest(restingUntil.note[key])
 	delete(restingUntil.m, key)
 	delete(restingUntil.note, key)
 	restingUntil.Unlock()
+	if kept {
+		saveRests() // its rung starts over after a restart too
+	}
 }
 
 // How long a candidate sits out, by why it failed.
@@ -166,6 +170,12 @@ const (
 	creditRest  = 30 * time.Minute // out of credit: until someone tops it up
 	quotaRest   = 15 * time.Minute // out of quota, with no word of when it resets
 	longestWait = time.Hour        // the most a vendor's own "try again at" is trusted
+	// chatgptCreditRest is how long a ChatGPT account out of its credits
+	// sits out when neither the refusal nor its reading says when it can
+	// answer again: its credits come with the plan, by the month, and its
+	// own allowance is back as its five hours renew (PaulT on Discord: a
+	// credits-only account was asked every half hour, 402 each time)
+	chatgptCreditRest = 5 * time.Hour
 	// longestQuota is the most an account out of quota, or failing with a
 	// window full, sits out, when it says when it's back: a week's window,
 	// and a day over
@@ -201,6 +211,56 @@ const (
 	slowForget = 30 * time.Minute
 )
 
+// creditLadder is how long a key its vendor says is out of money sits
+// out, by how many times in a row it was refused so (creditBackoff): a
+// balance spent, or a spend limit reached, comes back when someone tops
+// it up or raises the limit, or when a month's limit turns, not in half
+// an hour (PaulT on Discord: an OpenAI key's 402 had it asked, and
+// refused, every 30 minutes). The first rest is creditRest still, as a
+// relay's 402 can be its own moment's; each refusal after a rest ended
+// rests it longer, up to a week. "Try now" lifts it whenever the user
+// has topped it up, and an answer clears the count.
+var creditLadder = []time.Duration{creditRest, 2 * time.Hour, 8 * time.Hour, 24 * time.Hour, 3 * 24 * time.Hour, 7 * 24 * time.Hour}
+
+// creditSoon: an out-of-credit refusal that says it can pass soon, or
+// that a smaller request would: OpenRouter's in-flight budget (a 402
+// with Retry-After, "a wait-and-retry case", openrouter.ai/docs/
+// api-reference/errors), its "requires more credits, or fewer
+// max_tokens … can only afford N" (the request's size, not the balance
+// spent), and a vendor's "try again in 30 seconds" or "1 分钟后重试".
+// These rest creditRest, as before; they don't climb creditLadder.
+var creditSoon = regexp.MustCompile(`(?i)openrouter_in_flight_budget|can only afford|fewer max_tokens|(?:try again|retry)(?: after| in)?\s*\d|\d+\s*(?:秒|分钟|小时)[后後]`)
+
+// creditBackoff is the rest of a key (c, no subscription account) out of
+// credit, rested by id: the vendor's own time when it names one (a
+// Retry-After, a reset in its body or headers), creditRest when it says
+// it can pass soon (creditSoon), else the next rung of creditLadder —
+// the same rung while the last rest still runs (the lone key asked all
+// the same), one up once it has ended. n is the rung, 0 off the ladder.
+func creditBackoff(id string, header http.Header, body []byte, now time.Time) (d time.Duration, by string, n int, guessed bool) {
+	if w := resetsAt(body, now); w > 0 {
+		return min(w, longestMonthly), "resets", 0, false
+	}
+	if w := resetsNoted(header, now); w > 0 {
+		return min(w, longestMonthly), "resets", 0, false
+	}
+	if retryAfter(header, now) > 0 || creditSoon.Match(wordsOf(body)) {
+		return creditRest, "credit", 0, true
+	}
+	n = 1
+	restingUntil.Lock()
+	if prev, ok := restingUntil.note[id]; ok && prev.Why == failCredit && prev.Failures > 0 {
+		// its rest gone rather than ended (lifted) starts a new run
+		if until, had := restingUntil.m[id]; had && now.Before(until) {
+			n = prev.Failures
+		} else if had {
+			n = prev.Failures + 1
+		}
+	}
+	restingUntil.Unlock()
+	return creditLadder[min(n, len(creditLadder))-1], "credit", n, true
+}
+
 var (
 	// creditWords: the account or key has no money left.
 	creditWords = regexp.MustCompile(`(?i)insufficient.?(balance|credit|fund)|balance|credit|billing|payment|arrear|overdue|suspended|余额|欠费|充值|账户.*(不足|停)`)
@@ -218,7 +278,7 @@ var (
 	// "rate_limit_error" for its type, every such 429 was, and rested a
 	// quarter of an hour rather than a minute (#153).
 	// "Frequency limit" is the English of 频率 (zoecats on Discord).
-	rateWords = regexp.MustCompile(`(?i)rate.?limit|frequency.?limit|too many requests|per.?(second|sec|minute|min)\b|\b[rt]pm\b|频率|太频繁`)
+	rateWords = regexp.MustCompile(`(?i)rate.?limit|frequency.?limit|too many requests|per.?(second|sec|minute|min)\b|\b[rt]pm\b|频率|太频繁|过于频繁|速率`)
 	// plannedWords: a 429 that says the plan's own allowance is used, rate
 	// words or not — a day's free requests, say, or a sub2api key's own
 	// 5-hour, day or 7-day limit ("api key 7天限额已用完", sent as
@@ -551,7 +611,8 @@ type Rest struct {
 	Why    string    `json:"why"`    // failCredit, failQuota, failRate, failOther
 	Status int       `json:"status"` // what it answered
 	Until  time.Time `json:"until"`
-	// By is what set how long: "credit" (half an hour), "retry-after" (the
+	// By is what set how long: "credit" (half an hour, a key longer each
+	// time again: creditLadder), "retry-after" (the
 	// vendor's own headers), "resets" (the time Claude Code gave), "window"
 	// (the allowance window it filled renews), "quota" (no word of when),
 	// "cooldown" (a minute), "backoff" (longer each time it fails again,
@@ -589,6 +650,14 @@ type Rest struct {
 	// held every request for 15 minutes or more
 	first bool
 	askAt time.Time
+	// there: another computer's magpie refused one of its models
+	// (remoteModelRest). It routes that model there and holds its own
+	// rests, and what it serves under a name can change at any moment (a
+	// group moved to another vendor), so its refusal out of quota or
+	// credit is never given again here without asking it (quotaHeld):
+	// asked, it answers from its own hold at once, or from what it serves
+	// now
+	there bool
 }
 
 // asksAt is when r, a key's rest out of its allowance or credit, has it
@@ -608,17 +677,19 @@ func (r Rest) asksAt(now time.Time) time.Time {
 // renewed lifts the rests of a subscription account whose windows were
 // just started again (a Codex reset spent, or a reading finding a window
 // it was full in full no more): out of quota no longer. Only its rests out
-// of quota, or failed with a window full ("window"), are lifted; one for a
-// rate limit, its credit or a verification stays. Told agent "", it is a
-// key (provider.KeyAllowanceID) whose windows a reading found full no
-// more — its limit raised, or its usage reset — and its rest out of them
-// is lifted; a key's other rests aren't noted by it.
+// of quota, or failed with a window full ("window"), are lifted, and a
+// ChatGPT account's out of its credits, which it needs no more with its
+// window back; one for a rate limit, another's credit or a verification
+// stays. Told agent "", it is a key (provider.KeyAllowanceID) whose
+// windows a reading found full no more — its limit raised, or its usage
+// reset — and its rest out of them is lifted; a key's other rests aren't
+// noted by it.
 func renewed(agent, user string) {
 	restingUntil.Lock()
 	defer restingUntil.Unlock()
 	now := time.Now()
 	for k, r := range restingUntil.note {
-		if r.agent == agent && strings.EqualFold(r.user, user) && (r.Why == failQuota || r.By == "window") {
+		if r.agent == agent && strings.EqualFold(r.user, user) && (r.Why == failQuota || r.By == "window" || r.Why == failCredit && agent == "codex") {
 			delete(restingUntil.m, k)
 			delete(restingUntil.note, k)
 			liftedLocked(k, now)
@@ -692,10 +763,14 @@ func RestOf(key string) (Rest, bool) { return restOf(key) }
 func (s *Server) Unrest(key string) bool {
 	restingUntil.Lock()
 	_, ok := restingUntil.m[key]
+	kept := ladderRest(restingUntil.note[key])
 	delete(restingUntil.m, key)
 	delete(restingUntil.note, key)
 	liftedLocked(key, time.Now())
 	restingUntil.Unlock()
+	if kept {
+		saveRests()
+	}
 	unsink(key)
 	s.trace.lifted()
 	return ok
@@ -706,9 +781,10 @@ func (s *Server) Unrest(key string) bool {
 // asked again for all of them. It returns how many it lifted.
 func (s *Server) UnrestAll(key string) int {
 	restingUntil.Lock()
-	n, now := 0, time.Now()
+	n, now, kept := 0, time.Now(), false
 	for k := range restingUntil.m {
 		if k == key || strings.HasPrefix(k, key+"/") {
+			kept = kept || ladderRest(restingUntil.note[k])
 			delete(restingUntil.m, k)
 			delete(restingUntil.note, k)
 			liftedLocked(k, now)
@@ -717,6 +793,9 @@ func (s *Server) UnrestAll(key string) int {
 	}
 	liftedLocked(key, now)
 	restingUntil.Unlock()
+	if kept {
+		saveRests()
+	}
 	unsinkAll(key)
 	s.trace.lifted()
 	return n
@@ -1093,6 +1172,38 @@ func (s *Server) restAfterMarked(c candidate, status int, header http.Header, bo
 	switch why {
 	case failCredit:
 		d, r.By, guessed = creditRest, "credit", true
+		if a := c.p.Account; a != nil && a.UsageAgent() == "codex" {
+			// a ChatGPT account out of the credits its plan gives: they
+			// come again with the plan, and the account answers again
+			// once its own window renews, whichever comes first. Until the
+			// time the refusal names, else the window its reading has
+			// full (read whatever the credits it said it held: they are
+			// what ran out), else a while; a reading that finds the window
+			// renewed lifts it (renewed)
+			al, _ := c.allowance()
+			if w := resetsAt(body, now); w > 0 {
+				d, r.By = w, "resets"
+			} else if w := resetsNoted(header, now); w > 0 {
+				d, r.By = w, "resets"
+			} else if t := al.Full(c.model, provider.SpentShareOf(c.p.Routing), now); !t.IsZero() {
+				d, r.By = t.Sub(now), "window"
+			} else if w := retryAfter(header, now); w > chatgptCreditRest {
+				d, r.By = w, "retry-after"
+			} else {
+				d = chatgptCreditRest
+			}
+			d, guessed = min(d, longestMonthly), false
+		} else if c.p.Account == nil && !remoteModelRest(c, why, header) {
+			// a key out of money: longer each time it is refused so
+			// again (creditLadder). Rested by the id the rest is kept
+			// under below; another computer's magpie rests its model
+			// for it, as before
+			id := c.restKey()
+			if c.p.PaidBesideFree(c.model) {
+				id = c.restID()
+			}
+			d, r.By, r.Failures, guessed = creditBackoff(id, header, body, now)
+		}
 	case failQuota:
 		if c.onCredits() {
 			// a Codex account that holds credits refused as out of its
@@ -1286,7 +1397,7 @@ func (s *Server) restAfterMarked(c candidate, status int, header http.Header, bo
 		id = c.restID()
 	}
 	if remoteModelRest(c, why, header) {
-		id = c.restID()
+		id, r.there = c.restID(), true
 	}
 	r.Key = id
 	if id == c.restID() {
@@ -1305,9 +1416,13 @@ func (s *Server) restAfterMarked(c candidate, status int, header http.Header, bo
 			r.askAt = now.Add(fallbackCooldown)
 		}
 	}
+	kept := ladderRest(r) || ladderRest(restingUntil.note[id])
 	restingUntil.m[id] = r.Until
 	restingUntil.note[id] = r
 	restingUntil.Unlock()
+	if kept {
+		saveRests() // a magpie started again rests it out, and climbs on
+	}
 	if r.Probed {
 		s.probeLater(c.p, r, now)
 	}
@@ -1386,15 +1501,20 @@ func restSlow(c candidate, now time.Time) (Rest, bool) {
 		r.agent, r.user = a.UsageAgent(), a.User
 	}
 	restingUntil.Lock()
-	defer restingUntil.Unlock()
 	if until, ok := restingUntil.m[id]; ok && until.After(r.Until) {
 		// resting longer already, for what another failure said
 		kept := restingUntil.note[id]
 		kept.Until = until
+		restingUntil.Unlock()
 		return kept, true
 	}
+	ladder := ladderRest(restingUntil.note[id])
 	restingUntil.m[id] = r.Until
 	restingUntil.note[id] = r
+	restingUntil.Unlock()
+	if ladder {
+		saveRests() // its ended ladder rest is a slow one's now
+	}
 	return r, true
 }
 

@@ -202,7 +202,7 @@ body.window.mac .seg { top: calc(50% + 1px / var(--zoom, 1)); } /* 50% centres i
 .brand { display: flex; align-items: center; gap: 6px; font-weight: 600; letter-spacing: .01em; }
 body.window:not(.mac):not(.linux):not(.web) .brand { display: none; } /* Windows' title bar above already shows the icon and the name; a browser tab has no title bar of the app's */
 /* app.js removes these controls later; keep them out of the first paint too. */
-body.window :is(#open, #openMain, #quit),
+body.window :is(#open, #quit),
 body:not(.window.linux) #winclose { display: none; }
 /* Linux: the header is the title bar, so it closes the window too — round,
    as GNOME draws its close button, and set a little apart from the icons */
@@ -364,13 +364,17 @@ body.side-nav { --side-w: 212px; padding-left: var(--side-w); }
 @media (pointer: coarse) { .side-edge { right: -12px; width: 24px; } }
 .side-edge:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 4px; }
 body.side-drag, body.side-drag * { cursor: col-resize !important; user-select: none; }
-.side-top { flex: none; display: flex; align-items: center; height: 46px; padding: 0 18px; }
+/* its top is the title bar's left end: the sidebar's button (app.js
+   layoutNav), then the magpie, at the header's own height and left padding,
+   so the button is in the one place whether the sidebar shows or not, as
+   Finder's and Notes' is (ztf4080 on X) */
+.side-top { flex: none; display: flex; align-items: center; gap: 8px; height: 46px; padding: 0 18px 0 14px; }
 .side-top .brand { font-size: 13.5px; }
+/* a sidebar too narrow for the name keeps the bird (app.js fitTop) */
+.side-top.tight .brand > span:not(.logo) { display: none; }
 /* the traffic lights are the sidebar's top left, as in a Mac app's sidebar;
-   the magpie beside them, level with them (see .top above) */
-body.window.mac .side-top { height: calc(50px / var(--zoom, 1)); padding: calc(2px / var(--zoom, 1)) 0 0 calc(90px / var(--zoom, 1)); }
-/* Windows' title bar above already shows the icon and the name */
-body.window:not(.mac):not(.linux):not(.web) .side-top { height: 10px; }
+   the button and the magpie beside them, level with them (see .top above) */
+body.window.mac .side-top { height: calc(50px / var(--zoom, 1)); padding: calc(2px / var(--zoom, 1)) 0 0 calc(96px / var(--zoom, 1)); }
 .side-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 0 10px 10px; }
 .side-foot { flex: none; max-height: 55%; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; padding: 8px 10px 10px; border-top: .5px solid var(--line-2); }
 /* a short window's sidebar keeps no bar beside its pages: a thin one is laid
@@ -679,6 +683,7 @@ body.panel #agents > .row .ag-handle::before { left: -8px; }
 .ag-who > svg { flex: none; }
 .ag-who .v { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .ag-who.open { background: var(--pill); color: var(--fg); }
+.ag-open .field.ag-who .ok { order: 2; }
 .ag-who .ok { display: none; flex: none; align-items: center; gap: 3px; color: var(--green); font-weight: 600; }
 .ag-who.done .ok { display: inline-flex; }
 .ag-fix.busy svg > * { transform-box: view-box; transform-origin: 50% 50%; animation: spin .8s linear infinite; }
@@ -1516,7 +1521,7 @@ body.masked :hover > .acct-eye, body.masked .pq-card:hover .acct-eye, body.maske
 .led .src.access-subscription { --badge-ink: var(--tk-k); }
 .led .src.proto { --badge-ink: var(--muted); font-weight: 500; }
 .led .src.reported { --badge-ink: var(--tk-o); }
-.led .src.probe { --badge-ink: var(--muted); }
+.led .src.probe, .led .src.mcp { --badge-ink: var(--muted); }
 .led .duration { font-weight: 550; }
 .led .duration-fast { color: var(--tk-s); }
 .led .duration-slow { color: var(--amber); }
@@ -2797,12 +2802,18 @@ body.window .ag-sk-icon { width: 22px; height: 22px; border-radius: 6px; }
    and gives way before the row runs past a narrow window */
 #gatewayKeys .amodels.key-quotas { display: inline-block; flex: 0 1 auto; min-width: 0; line-height: 20px; overflow: hidden; text-overflow: ellipsis; }
 #gatewayKeys .acc:not(:hover) > .key-quotas:not(.set):not(:focus) { max-width: 0; padding: 0; margin-left: -9px; box-shadow: none; }
+/* a read-only key's tag, always shown, never a button */
+#gatewayKeys .amodels.key-readonly { display: inline-block; flex: 0 1 auto; min-width: 0; line-height: 20px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: default; }
+#gatewayKeys .amodels.key-readonly:hover { color: var(--accent); background: var(--accent-soft); }
 /* the Settings row's picker: the key row's badge, always shown */
 .row.pref .proto.pick { flex: none; margin-left: auto; display: inline-flex; align-items: center; gap: 3px; height: 24px; padding: 0 6px 0 9px; font: inherit; font-size: 12px; color: var(--fg-2); border: 0; border-radius: 7px; background: var(--pill); white-space: nowrap; cursor: default; transition: background .12s, color .12s; }
 .row.pref .proto.pick svg { opacity: .7; transition: transform .15s var(--ease); }
 .row.pref .proto.pick.open svg { transform: rotate(180deg); }
 .row.pref .proto.pick:hover, .row.pref .proto.pick.open { color: var(--fg); background: var(--pill-hover); }
 .row.pref .proto.pick.busy { opacity: .6; }
+.row.pref .tray-windows { flex: 0 1 auto; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; min-width: 0; max-width: 55%; }
+.row.pref .tray-windows .proto.pick { max-width: 100%; margin-left: 0; }
+.row.pref .tray-windows .proto.pick > span { overflow: hidden; text-overflow: ellipsis; }
 .pop.proto-menu { width: 262px; max-height: min(360px, 70vh); overflow-y: auto; overscroll-behavior: contain; padding: 4px; border: 1px solid var(--line); display: grid; gap: 1px; }
 .proto-menu .pm-head { padding: 6px 8px 5px; font-size: 11px; color: var(--muted); }
 .proto-menu .pm-item { display: flex; align-items: flex-start; gap: 7px; width: 100%; padding: 6px 8px 7px; border: 0; border-radius: 7px; background: none; color: var(--fg); font: inherit; text-align: left; cursor: default; outline: none; }
@@ -3503,6 +3514,15 @@ body:not(.side-nav) #view-settings .set-head.stuck::before { box-shadow: 0 1px 0
 .row.pref .set-field { flex: none; width: 120px; height: 24px; padding: 0 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--card); }
 .row.pref .set-field[type=number] { width: 72px; text-align: right; }
 .row.pref .set-field[aria-invalid=true] { border-color: var(--red); }
+/* the quick panel's shortcut: a field that listens for keys, and its clear */
+#panelKey { flex: none; margin-left: auto; display: flex; align-items: center; gap: 4px; }
+#panelKey .key-rec { min-width: 120px; height: 24px; padding: 0 8px; font: inherit; font-size: 12px; color: var(--fg); border: 1px solid var(--line); border-radius: 7px; background: var(--card); white-space: nowrap; cursor: default; }
+#panelKey .key-rec.on { color: var(--fg-2); border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+#panelKey .key-rec:disabled { opacity: .5; }
+#panelKey .key-clear { display: grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%; color: var(--fg-2); background: none; }
+#panelKey .key-clear:hover { color: var(--fg); background: var(--pill); }
+#panelKey .key-clear[hidden] { display: none; }
+#panelKeyRow .sub { user-select: text; -webkit-user-select: text; }
 /* a plugin's page that broke (kernel.js): what broke, and Try again */
 .slot-error .row { gap: 14px; padding: 12px 14px; }
 .slot-error .sub { margin-top: 2px; color: var(--fg-2); overflow-wrap: anywhere; }
@@ -4522,6 +4542,21 @@ body .row.agent .ag-prefs .row.pref .who { display: block; }
 :is(.ag-prefs, .agent-prefs) .compact-at { flex: 0 1 auto; min-width: 0; flex-wrap: wrap; row-gap: 6px; }
 /* Settings' search finds them; not searching, the links stay out */
 #view-settings:not(.set-searching) #agentPrefLinks { display: none; }
+
+/* a provider's rate windows (#2463): the editor's rows, a day chip each,
+   a span and a rate beside them */
+.rate-windows > .rate-win:last-child + button { align-self: start; }
+.rate-win { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.rate-win .day-chips { display: flex; gap: 2px; }
+.rate-win .day-chip { min-width: 24px; height: 24px; padding: 0 4px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--muted); font: inherit; font-size: 11px; }
+.rate-win .day-chip.on { color: var(--fg); background: var(--seg-thumb); box-shadow: var(--seg-edge); }
+.rate-win input { width: 64px; height: 28px; padding: 0 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--card); color: var(--fg); font: inherit; font-size: 12px; }
+.rate-win .rate-rate { width: 56px; }
+.rate-win .rate-dash { color: var(--muted); }
+.rate-win .rate-win-del { flex: none; padding: 0 6px; color: var(--muted); }
+.rate-win .rate-win-del:hover { color: var(--red); }
+.rate-win .rate-time { width: 86px; height: 28px; justify-content: space-between; padding: 0 8px; flex: none; }
+.rate-win .rate-time[data-value=""] span { color: var(--muted); }
 .sess-pick.led-more { padding: 0 6px; }
 .sess-pick.led-more svg { transform: none; }
 .sess-tools .led-rename { flex: none; width: 180px; height: 26px; padding: 0 8px; border-radius: 7px; font-size: 12px; }

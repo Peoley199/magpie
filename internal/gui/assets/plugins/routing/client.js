@@ -2568,6 +2568,10 @@ function routingPage(part) {
       else if (w.speaks) s = t("{api} only", { api: API[w.speaks] || w.speaks });
       else s = w.kind === "key" ? t("API key") : t("one key");
       if (row.st.textContent !== s) row.st.textContent = s;
+      // the intent is the user's own words, of any length: cut short on
+      // the row (routing.css), read whole over it
+      const full = said && s.includes(said) ? s : "";
+      if (row.st.title !== full) { if (full) row.st.title = full; else row.st.removeAttribute("title"); } // an empty title would hide the row's own
       // an account's windows each, with when they reset, in its tooltip
       // (#1835): the row says the fullest one while idle and what it is
       // doing while it answers, and a second line on every seat would
@@ -3104,6 +3108,10 @@ function routingPage(part) {
       : t("{agent} requested a subagent on {model}.", { agent, model: r.model });
     if (purposeOf(r.kind) === "kind:ambient_suggestions") return t("{agent} drafted the suggested prompts on its home page by itself, in the background, searching the project's files and connected apps, and checked them for safety. Not a turn of the conversation; Codex's Settings › Configuration › Suggested prompts turns it off.", { agent });
     if (purposeOf(r.kind) === "kind:composer_predictions") return t("{agent} guessed your next message for its composer by itself, reading the whole conversation again. Not a turn of the conversation; Codex composer predictions, under Settings in Codex's row on the Agents page, picks its model, and Codex's Settings › General › Show predictions turns it off.", { agent });
+    // Claude Desktop's check that magpie answers names its model itself
+    // (cybercaius on Discord: "Desktop requested deepseek-flash" while
+    // the chat was on another model)
+    if (r.kind === "connection_check") return t("{agent} checked that magpie answers, as it does when it starts and from its Test connection. It names this check's model itself, from the names in its model list ({model}), not the model chosen in the conversation, and only reads whether an answer comes back; magpie sends it to the model chosen in {agent}'s model menu, or to its first listed model when none is. Not a turn of the conversation.", { agent, model: r.model });
     if (r.kind === "luna_reserve") return t("{agent} sent this turn on Luna Reserve, which it turns to once the plan's own allowance is used up; it picks the model itself.", { agent });
     // the searcher asked first failed or found nothing, and this one
     // searched in its place: say which and why, not just who searched
@@ -4441,7 +4449,10 @@ function routingPage(part) {
       return pointAt(l.p, l.rev ? lens[i] - d : d);
     };
     if (!total) return;
-    const d = e * total, pt = point(d);
+    // every wire ends at a card, and the sky is under the cards: a flight
+    // starts and ends a dot clear of them, so a dot held at its seat or
+    // waiting at magpie is seen whole
+    const edge = Math.min(6, total / 4), d = edge + e * (total - 2 * edge), pt = point(d);
     setAttr(tr.dot, "cx", String(pt.x));
     setAttr(tr.dot, "cy", String(pt.y));
     tr.dot.removeAttribute("visibility");
@@ -4809,7 +4820,7 @@ function routingPage(part) {
   const LIST_OPTS = [["", "Its models too"], ["unlists", "The group alone"]];
   const LIST_HINT = {
     "": "Agents' model lists and the gateway's /v1/models show the group and each of its models.",
-    unlists: "Agents' model lists and the gateway's /v1/models show the group, not the models it names or its patterns match: they are used through it. A request naming one is still answered.",
+    unlists: "Agents' model lists and the gateway's /v1/models show the group, not the models it names or its patterns match: they are used through it. A signed-in subscription's models stay in agents' lists. A request naming one is still answered.",
   };
   const SINK_HINT = {
     "": "One rate limited while it still has quota rests as long as the vendor asks, then takes its place in the order again.",

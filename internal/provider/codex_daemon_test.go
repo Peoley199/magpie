@@ -577,6 +577,55 @@ func TestCodexAppStale(t *testing.T) {
 	}
 }
 
+// An app-server that went with none started in its place left the app
+// with nothing that read the new sign-in (蛋仔 on Discord, Windows: "Codex
+// app-server process is not available" till Codex was reopened): while
+// the app runs, that is still said; once it quits, or it starts another,
+// it isn't.
+func TestCodexAppStaleWhileNoServerCameBack(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("USERPROFILE", t.TempDir())
+	server, open := 60, true
+	oldList, oldOpen := listProcesses, CodexAppOpen
+	t.Cleanup(func() {
+		listProcesses, CodexAppOpen = oldList, oldOpen
+		DismissCodexDaemon()
+		DismissCodexApp()
+		codexApp.Lock()
+		codexApp.switched = false
+		codexApp.Unlock()
+	})
+	listProcesses = func(context.Context) ([]proc.Process, error) {
+		if server == 0 {
+			return nil, nil
+		}
+		return []proc.Process{{PID: server, Args: codexWindowsAppServer}}, nil
+	}
+	CodexAppOpen = func(context.Context) (bool, bool) { return open, true }
+	recheck := func() { codexDaemonMu.Lock(); codexDaemonChecked = time.Time{}; codexDaemonMu.Unlock() }
+	DismissCodexApp()
+
+	noteCodexSwitch("a@x", "b@x")
+	server = 0 // ended, and the app started none
+	recheck()
+	if got := CodexAppStale(); got != "a@x" {
+		t.Fatalf("app open with no app-server: got %q, want a@x", got)
+	}
+	open = false
+	recheck()
+	if got := CodexAppStale(); got != "" {
+		t.Fatalf("app quit: %q", got)
+	}
+
+	open, server = true, 60
+	noteCodexSwitch("a@x", "b@x")
+	server = 61
+	recheck()
+	if got := CodexAppStale(); got != "" {
+		t.Fatalf("a new app-server: %q", got)
+	}
+}
+
 // The daemon magpie restarts runs with the login shell's proxy and PATH,
 // as one a terminal started would (guotianci6 on X): magpie opened from
 // the desktop has neither.

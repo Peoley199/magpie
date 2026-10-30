@@ -270,6 +270,9 @@ func usageRoutes(mux *http.ServeMux, w Windows) {
 		qs = usage.WithWindowHolds(qs, usage.Clock())
 		// and when each began, for its Pace number (fflake33)
 		qs = provider.WithWindowStarts(qs, usage.Clock())
+		// and which the menu bar can show, by kind, for Settings to pick
+		// among (settings.TrayWindows)
+		qs = withTrayKinds(qs)
 		// an account's card may be the stale copy a read under way will
 		// replace: the page asks again until it has landed (#959)
 		if provider.SubscriptionUsageReading() {
@@ -289,7 +292,7 @@ func usageRoutes(mux *http.ServeMux, w Windows) {
 		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 		defer cancel()
 		provider.RefreshUsage(ctx, id, r.URL.Query().Get("user"))
-		writeJSON(rw, provider.WithWindowStarts(usage.WithWindowHolds(provider.InProviderOrder(provider.WithCheckins(provider.Quotas(ctx))), usage.Clock()), usage.Clock()))
+		writeJSON(rw, withTrayKinds(provider.WithWindowStarts(usage.WithWindowHolds(provider.InProviderOrder(provider.WithCheckins(provider.Quotas(ctx))), usage.Clock()), usage.Clock())))
 	})
 	// WorkBuddy's daily check-in pressed now, from the Usage card, for
 	// each account not in yet today, as `magpie accounts checkin` does; the

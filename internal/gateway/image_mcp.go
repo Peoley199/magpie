@@ -181,6 +181,9 @@ type imageJob struct {
 	started time.Time
 	done    chan struct{}
 	result  map[string]any // the tool result, once done
+	// use is what the call that started it used, which a
+	// generation_result's row names too
+	use *mcpUse
 }
 
 type imageFile struct {
@@ -190,7 +193,7 @@ type imageFile struct {
 }
 
 func (s *Server) imageMCP(w http.ResponseWriter, r *http.Request) {
-	serveMCP(w, r, "magpie's image generation", visionMCPBody, s.imageMCPCall)
+	serveMCP(w, r, "magpie's image generation", imageServerName, visionMCPBody, s.imageMCPCall)
 }
 
 // imageMCPCall answers one request: its result, or its JSON-RPC error.
@@ -221,6 +224,8 @@ func (s *Server) imageMCPCall(r *http.Request, m mcpMessage) (any, map[string]an
 			return nil, map[string]any{"code": -32602, "message": err.Error()}
 		}
 		return map[string]any{"model": ref}, nil
+	case MCPCalledMethod:
+		return imageMCPCalled(r, m.Params)
 	case "tools/call":
 		var p struct {
 			Name      string          `json:"name"`
@@ -319,7 +324,7 @@ func (s *Server) imageMCPDraw(r *http.Request, raw json.RawMessage) map[string]a
 	// the drawing goes on when the call has answered: a job of its own,
 	// with the call's caller (its key, its agent) but not its end
 	in := inProcess(r, context.WithoutCancel(r.Context()), http.MethodPost, path, body)
-	j := s.imageMCPStart(who.KeyID, func() map[string]any {
+	j := s.imageMCPStart(who.KeyID, mcpUseOf(r.Context()), func() map[string]any {
 		defer release()
 		ctx, cancel := context.WithTimeout(in.Context(), imageMCPJobMost)
 		defer cancel()
@@ -530,6 +535,8 @@ func (s *Server) imageMCPVideo(r *http.Request, id string) map[string]any {
 			} `json:"error"`
 		}
 		json.Unmarshal(rec.body.Bytes(), &v)
+		// the video's model, provider/model, for a call that only asks after it
+		mcpUseOf(r.Context()).usedRef(v.Model)
 		switch v.Status {
 		case "completed":
 			length := ""
@@ -576,10 +583,10 @@ func (s *Server) imageMCPResult(r *http.Request, id string) map[string]any {
 	return s.imageMCPAwait(r, j)
 }
 
-// imageMCPStart runs draw as a job started by key.
-func (s *Server) imageMCPStart(key string, draw func() map[string]any) *imageJob {
+// imageMCPStart runs draw as a job started by key, in a call that is use.
+func (s *Server) imageMCPStart(key string, use *mcpUse, draw func() map[string]any) *imageJob {
 	st := &s.imageStore
-	j := &imageJob{id: "img_" + randomHex(12), key: key, started: time.Now(), done: make(chan struct{})}
+	j := &imageJob{id: "img_" + randomHex(12), key: key, started: time.Now(), done: make(chan struct{}), use: use}
 	st.mu.Lock()
 	if st.jobs == nil {
 		st.jobs = map[string]*imageJob{}
@@ -610,6 +617,7 @@ func (s *Server) imageMCPAwait(r *http.Request, j *imageJob) map[string]any {
 	defer limit.Stop()
 	select {
 	case <-j.done:
+		mcpUseOf(r.Context()).from(j.use)
 		return j.result
 	case <-limit.C:
 	case <-r.Context().Done():

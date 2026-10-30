@@ -177,9 +177,11 @@ var presets = []PresetDef{
 	// rather than a key; and its partner models (publisher/model ids,
 	// VertexPartner) on Google's OpenAI-compatible chat completions there,
 	// the live ones Google's docs list at global on 2026-10-28 (Gemma 4,
-	// Experimental, is left to be typed in). It has no list to ask that
-	// says which models a location serves, so they are given: these,
-	// every one global serves;
+	// Experimental, is left to be typed in); and Anthropic's Claude
+	// (VertexClaude) on its Messages API there, the current ones under the
+	// ids Claude Code asks Vertex AI for (an older one, claude-…@date, is
+	// typed in). It has no list to ask that says which models a location
+	// serves, so they are given: these, every one global serves;
 	// vertexModels has the others'. Its Priority PayGo and Flex PayGo are
 	// asked for with the two headers.
 	{ID: VertexPreset, Name: "Google Vertex AI", Short: "Vertex AI", Icon: "vertexai-color", Kind: KindVendor,
@@ -189,7 +191,8 @@ var presets = []PresetDef{
 		Models: []string{"gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite",
 			"gemini-4-argon", "gemini-3.1-pro-preview", "gemini-3.1-pro-preview-customtools", "gemini-3.1-flash-lite", "gemini-3-flash-preview",
 			"gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
-			"deepseek-ai/deepseek-v4.1-flash-maas", "zai-org/glm-5.2-maas", "openai/gpt-oss-120b-maas"},
+			"deepseek-ai/deepseek-v4.1-flash-maas", "zai-org/glm-5.2-maas", "openai/gpt-oss-120b-maas",
+			"claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-1"},
 		HeaderHints: []string{"X-Vertex-AI-LLM-Request-Type", "X-Vertex-AI-LLM-Shared-Request-Type"}},
 	{ID: "deepseek", Name: "DeepSeek", Icon: "deepseek-color", Kind: KindVendor, Catalog: "deepseek",
 		Chat: "https://api.deepseek.com/v1", Responses: "https://api.deepseek.com/v1", Anthropic: "https://api.deepseek.com/anthropic",

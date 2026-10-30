@@ -176,6 +176,7 @@ func TestSettingsSaveKeepsWhatItDoesNotSend(t *testing.T) {
 		UpdateMirror:         "https://mirror.example/",
 		Window:               []int{900, 700},
 		WindowMaximised:      true,
+		WindowAt:             []int{-1440, 120},
 		FullContext:          true,
 		DesktopLongest:       true,
 		GuideHidden:          true,
@@ -193,6 +194,7 @@ func TestSettingsSaveKeepsWhatItDoesNotSend(t *testing.T) {
 	was.ClaudeRunsMost = 3
 	was.RequestArchiveLocal, was.RequestArchiveLocalMB = true, 256
 	was.ProxyCustom = "http://me:secret@proxy.example:8080"
+	was.PanelShortcut = "Ctrl+Alt+K"
 	if err := settings.Save(was); err != nil {
 		t.Fatal(err)
 	}

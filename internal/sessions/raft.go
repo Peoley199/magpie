@@ -47,12 +47,24 @@ func raftFilesIn(dir string) []file {
 }
 
 // GatewayKeys are the "agent|id" keys a session's gateway record can
-// carry: its own, and for Raft's, Pi's, as Raft's Pi tells the gateway
-// it is Pi. MergeExternal keeps the same keys as pairs.
+// carry: its own; for Raft's, Pi's, as Raft's Pi tells the gateway it is
+// Pi; for one Claude Desktop's Code tab ran, Desktop's, as the gateway
+// knows its requests by Desktop's user agent; the ids of the copies of its
+// conversation (ccCopies); and its subagents' own ids (subIDs), whose calls
+// it counts already. MergeExternal keeps the same keys as pairs.
 func GatewayKeys(s Session) []string {
 	k := []string{s.Agent + "|" + s.ID}
 	if s.Agent == "raft" {
 		k = append(k, "pi|"+s.ID)
+	}
+	if s.App != "" {
+		k = append(k, s.App+"|"+s.ID)
+	}
+	for _, id := range s.Copies {
+		k = append(k, s.Agent+"|"+id)
+	}
+	for _, id := range s.Subs {
+		k = append(k, s.Agent+"|"+id)
 	}
 	return k
 }

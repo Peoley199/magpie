@@ -47,6 +47,18 @@ a live gateway.
 
 ## Gateway Caller Keys
 
+`key-page.test.cjs` drives the gateway's key page (`/me`,
+`internal/gateway/keypage.html`, under the gateway's CSP) at 390px in
+Chromium and WebKit and every language: a wrong key is told so in the
+page's language and shows nothing; the right one shows its limit, its
+usage and most used model, picks that model, and gives Claude Code, Codex,
+OpenAI-compatible and curl setup at the address the page was opened at,
+with a placeholder until "Put my key in the setup" is ticked. A reload
+keeps the key in the tab, Forget takes it away, and no request carries the
+key in its address. A read-only key gets no setup. Gateway → Gateway keys
+shows the page's address (the LAN one, or `MAGPIE_PUBLIC_URL`) with a
+Copy, translated, and nothing with no key.
+
 `gateway-keys-empty.test.cjs` checks the Gateway page with no gateway key
 yet, as magpie web on a 390px phone: "No gateway keys yet" sits inside the
 list's card, inset from its edges, in the muted colour and size of Recent
@@ -354,7 +366,10 @@ with the API faked.
 `plugins-more-discover.test.cjs` checks that the add sheet's "More in
 Plugins" row and its "look for a plugin" link open Plugins on Discover,
 after Built-in or Installed was the tab open last (outloudvi on Discord).
-English and Chinese, Chromium and WebKit, with the API faked.
+From the tray panel they ask the window for Plugins with what was looked
+for (`window/main?view=plugins&q=`), and the window opened at the address
+`mainView` makes of that shows Discover once, its address giving q up
+(#3579). English and Chinese, Chromium and WebKit, with the API faked.
 
 `plugin-git.test.cjs` checks a plugin installed from a git repository: the
 market's field says it takes a GitHub repo, and Install sends

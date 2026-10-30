@@ -436,12 +436,8 @@ func pluginListings(ctx context.Context) []pluginListingJSON {
 		}
 		out = append(out, j)
 	}
-	ns := make([]*plugin.NPM, len(out))
-	for i := range out {
-		ns[i] = out[i].NPM
-	}
 	// at once: a picture still being fetched shows on the next ask
-	npmIcons(ns, 0)
+	listingIcons(out, 0)
 	return out
 }
 
@@ -459,6 +455,34 @@ func pluginAgents(ctx context.Context) []string {
 		}
 	}
 	return out
+}
+
+// listingIcons puts each listing's pictures as the page can show them:
+// the one registry.json gives (Kilo Code's https://github.com/Kilo-Org.png)
+// and the one its package.json gives, both kept as a GitHub-tagged
+// plugin's is, in one wait. A bundled icon's name is left as it is; a
+// picture not kept by wait is left out, so the card shows npm's picture
+// or its kind's glyph until the next ask.
+func listingIcons(ls []pluginListingJSON, wait time.Duration) {
+	n := len(ls)
+	said := make([]string, 2*n)
+	for i, l := range ls {
+		if provider.MarketPicture(l.Icon) {
+			said[i] = l.Icon
+		}
+		if l.NPM != nil {
+			said[n+i] = l.NPM.Icon
+		}
+	}
+	got := provider.RepoIcons(said, wait)
+	for i := range ls {
+		if said[i] != "" {
+			ls[i].Icon = got[i]
+		}
+		if ls[i].NPM != nil {
+			ls[i].NPM.Icon = got[n+i]
+		}
+	}
 }
 
 // npmIcons puts the picture each package gives (magpie.icon) as the page
@@ -512,11 +536,7 @@ func pluginMarketState(ctx context.Context, w Windows) pluginMarketJSON {
 		n := info[l.Package]
 		m.Listings = append(m.Listings, pluginListingJSON{Listing: l, NPM: &n})
 	}
-	ns := make([]*plugin.NPM, len(m.Listings))
-	for i := range m.Listings {
-		ns[i] = m.Listings[i].NPM
-	}
-	npmIcons(ns, 3*time.Second)
+	listingIcons(m.Listings, 3*time.Second)
 	for i, e := range m.State.Plugins {
 		if !plugin.IsGit(e.Spec) {
 			m.State.Plugins[i].Latest = info[plugin.Name(e.Spec)].Version

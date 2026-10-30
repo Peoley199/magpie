@@ -593,6 +593,9 @@ func (c claudeCLI) env(env []string, configDir string) []string {
 	if configDir != "" {
 		names = append(slices.Clone(names), "CLAUDE_CONFIG_DIR/p")
 	}
+	if slices.ContainsFunc(env, func(e string) bool { return strings.HasPrefix(e, "CLAUDE_CODE_OAUTH_TOKEN=") }) {
+		names = append(slices.Clone(names), "CLAUDE_CODE_OAUTH_TOKEN")
+	}
 	if c.wsl.Root {
 		// asRoot's, for a distro whose user is root
 		names = append(slices.Clone(names), "IS_SANDBOX")
@@ -2060,15 +2063,22 @@ func inClaudeDir(env []string, configDir string) []string {
 	if configDir == "" {
 		return env
 	}
-	out := make([]string, 0, len(env)+1)
+	out := make([]string, 0, len(env)+2)
 	for _, e := range env {
 		switch k, _, _ := strings.Cut(e, "="); k {
-		case "CLAUDE_CONFIG_DIR", "CLAUDE_SECURESTORAGE_CONFIG_DIR":
+		case "CLAUDE_CONFIG_DIR", "CLAUDE_SECURESTORAGE_CONFIG_DIR", "CLAUDE_CODE_OAUTH_TOKEN":
 			continue
 		}
 		out = append(out, e)
 	}
-	return append(out, "CLAUDE_CONFIG_DIR="+configDir)
+	out = append(out, "CLAUDE_CONFIG_DIR="+configDir)
+	// an account added by a setup-token: Claude Code takes the token as
+	// `claude setup-token` says to, in its environment, for this account's
+	// directory alone; never on the command line, nor logged
+	if tok := provider.ClaudeDirToken(configDir); tok != "" {
+		out = append(out, "CLAUDE_CODE_OAUTH_TOKEN="+tok)
+	}
+	return out
 }
 
 func cleanClaudeEnv(env []string) []string {
@@ -3146,10 +3156,18 @@ func renderCachedParts(blocks []map[string]any, text *strings.Builder, parts []P
 		case Image:
 			blocks = imageBlocks(blocks, text, p)
 		}
-		if cached && p.cache != "" {
+		// A client block ends its rendered block even without a mark of its
+		// own: the mark a client put on this position last round has moved
+		// on with the conversation's growth, and with the boundary merged
+		// into the next marked block Anthropic's prefix check — which looks
+		// back over block boundaries, not into them — finds the old write
+		// no more and the whole history is written again (#3835)
+		if cached && (p.cache != "" || p.block) {
 			blocks = closeBlocks(blocks, text)
 			text.Reset()
-			blocks[len(blocks)-1]["cache_control"] = cacheMark(p.cache)
+			if p.cache != "" {
+				blocks[len(blocks)-1]["cache_control"] = cacheMark(p.cache)
+			}
 		}
 	}
 	return blocks
@@ -4459,6 +4477,13 @@ func (s *Server) serveSubscription(w http.ResponseWriter, r *http.Request, from 
 	var err error
 	if name == "Claude Code" && wantsClientCache(r, from) {
 		req, err = parseAnthropicRequest(body, true)
+	} else if name == "Claude Code" && classifierClientCache(from, body) {
+		// the classifier never asked for its marks through magpie's
+		// header: a set the bridge can't keep (a TTL order Anthropic
+		// would refuse) goes the default way, as before, not refused
+		if req, err = parseAnthropicRequest(body, true); err != nil {
+			req, err = parse(from, body)
+		}
 	} else {
 		req, err = parse(from, body)
 	}

@@ -272,6 +272,20 @@ func statsKept(ranges []int, now time.Time, wantNative bool) ([]Stats, map[strin
 	return out, keptStats.native
 }
 
+// appsOf is the agent each session ran in, by key, where it isn't the one
+// whose files hold it (Session.App): a Claude Code session Claude Desktop's
+// Code tab ran is Desktop's, as its calls are (claudeCallLine), though its
+// transcript is in Claude Code's own folder.
+func appsOf(files []file) map[string]string {
+	out := map[string]string{}
+	for _, f := range files {
+		if st := cache[f.path]; f.main && f.agent == "claude" && st != nil && desktopEntrypoint(st.Entry) {
+			out[f.key] = "claude-desktop"
+		}
+	}
+	return out
+}
+
 // statsOfRange is one range's Stats from what statsReadAll read, with the
 // locks it holds. listed is every session as listed, by key, or nil to
 // assemble the range's own.
@@ -317,6 +331,7 @@ func statsOfRange(days int, today time.Time, files []file, copies map[string]str
 		perDate          []dayShare
 	}
 	shares := map[string]*share{}
+	apps := appsOf(files)
 	for _, f := range files {
 		if f.mod.Before(since) || (copies[f.key] != "" && copied[f.path] == nil) {
 			continue
@@ -335,6 +350,7 @@ func statsOfRange(days int, today time.Time, files []file, copies map[string]str
 		if cwd == "" {
 			cwd = st.Cwd
 		}
+		agent := cmp.Or(apps[f.key], f.agent)
 		for date, d := range st.Days.all() {
 			if date == "" || date < from || date > out.To {
 				continue
@@ -343,14 +359,14 @@ func statsOfRange(days int, today time.Time, files []file, copies map[string]str
 				if t.zero() {
 					continue
 				}
-				k := uk{date, f.agent, cwd, model}
+				k := uk{date, agent, cwd, model}
 				u := use[k]
 				u.add(t)
 				use[k] = u
 				dates[date] = true
 			}
 			if d.Active > 0 {
-				k := ak{date, f.agent, cwd}
+				k := ak{date, agent, cwd}
 				a := act[k]
 				if a == nil {
 					a = &act0{}
@@ -502,7 +518,7 @@ func statsOfRange(days int, today time.Time, files []file, copies map[string]str
 		}
 		setSessionCodexIdentity(&s, identities)
 		setSessionCodexTaskTitle(&s, taskTitles)
-		sum := Summary{Key: key, Agent: s.Agent, ID: s.ID, Cwd: cmp.Or(folder[key], s.Cwd), Title: clip(s.Title, titleKept),
+		sum := Summary{Key: key, Agent: cmp.Or(s.App, s.Agent), ID: s.ID, Cwd: cmp.Or(folder[key], s.Cwd), Title: clip(s.Title, titleKept),
 			Nickname: s.Nickname,
 			Last:     s.Last, Role: s.Role, ParentSession: s.ParentSession, RootSession: s.RootSession, Priced: true, Active: sh.active / 1000, Models: []string{}, Days: []int{},
 			Prompts: sh.prompts, Replies: sh.replies, tools: countsOf(sh.tools, nil), skills: countsOf(sh.skills, sh.skillLast)}

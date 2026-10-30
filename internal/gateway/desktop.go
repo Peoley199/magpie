@@ -425,7 +425,10 @@ func aliased(id string) (string, bool) {
 	if len(number) != 10 {
 		return "", false
 	}
-	for _, e := range provider.Catalog() {
+	// the catalog Desktop and Science are listed from: a signed-in
+	// subscription's model a group listing alone keeps out of Catalog
+	// is still theirs (provider.SubscriptionKept)
+	for _, e := range provider.CatalogOf("claude-desktop") {
 		if aliasNumber(e.ID) == number {
 			return e.ID, true
 		}
@@ -461,10 +464,25 @@ func isClaudeDesktop(r *http.Request) bool {
 var desktopPicked struct {
 	sync.Mutex
 	model string
-	from  string // the file it was read from
+	from  string    // the file it was read from
+	at    time.Time // when that turn was sent (the file's time once read)
 }
 
 func desktopPickedPath() string { return filepath.Join(settings.Dir(), "claude-desktop.model") }
+
+// loadPicked reads desktopPicked from its file when it was read from
+// another (a new settings.Dir) or not yet. The caller holds its lock.
+func loadPicked() {
+	path := desktopPickedPath()
+	if desktopPicked.from == path {
+		return
+	}
+	b, _ := os.ReadFile(path)
+	desktopPicked.model, desktopPicked.from, desktopPicked.at = strings.TrimSpace(string(b)), path, time.Time{}
+	if fi, err := os.Stat(path); err == nil {
+		desktopPicked.at = fi.ModTime()
+	}
+}
 
 // desktopTurn is the model a Claude Desktop request for asked is served by.
 // byClaudeCode is a request Claude Code sent (its claude-cli/ User-Agent)
@@ -511,12 +529,13 @@ func desktopTurn(asked string, body []byte, byClaudeCode, bySubagent bool) strin
 	tools := hasTools(body)
 	desktopPicked.Lock()
 	defer desktopPicked.Unlock()
-	if path := desktopPickedPath(); desktopPicked.from != path {
-		b, _ := os.ReadFile(path)
-		desktopPicked.model, desktopPicked.from = strings.TrimSpace(string(b)), path
-	}
+	loadPicked()
 	picked := desktopPicked.model
 	if asked == picked {
+		if tools && !bySubagent {
+			// the session goes on on it: newer than a menu changed meanwhile
+			desktopPicked.at = time.Now()
+		}
 		return asked
 	}
 	aside := small(body)
@@ -560,7 +579,7 @@ func desktopTurn(asked string, body []byte, byClaudeCode, bySubagent bool) strin
 		return asked
 	}
 	if tools && !bySubagent {
-		desktopPicked.model = asked
+		desktopPicked.model, desktopPicked.at = asked, time.Now()
 		if os.MkdirAll(settings.Dir(), 0o755) == nil {
 			os.WriteFile(desktopPickedPath(), []byte(asked+"\n"), 0o600)
 		}
@@ -734,10 +753,17 @@ var desktopSurfaces = []string{"code", "cowork", "chat"}
 // changes; the newest such file is read). Desktop's check names a model
 // by its name (desktopProbe), so a chat on DeepSeek in the Code tab had
 // its check go to the first model listed, another provider's
-// (cybercaius on Discord, v0.1.2033). Of the menus' choices, the one the
-// last session ran on (desktopPicked) comes first, then desktopSurfaces'
-// order. Read only for the check, as Desktop starts and from Test
-// connection; a file not read or not parsed is no choice (desktopDefault).
+// (cybercaius on Discord, v0.1.2033). The newer of the two the user did
+// last wins: a turn sent after the file was last written goes first
+// (desktopPicked, the model that turn was for, while magpie serves it),
+// else the menus' choices in desktopSurfaces' order. Before, the last
+// session's model came first whenever any menu still held it, so a Code
+// tab switched off DeepSeek, its Cowork or Chat menu left on it, had the
+// check go on to DeepSeek while the chat went to the new model
+// (cybercaius on Discord, v0.1.2212). Read only for the check, as
+// Desktop starts and from Test connection; a file not read or not parsed
+// is no choice (desktopDefault), and a turn alone is not one either,
+// since it can be days old.
 func desktopChosen() string {
 	var path string
 	var newest time.Time
@@ -776,14 +802,14 @@ func desktopChosen() string {
 		return ""
 	}
 	desktopPicked.Lock()
-	if p := desktopPickedPath(); desktopPicked.from != p {
-		b, _ := os.ReadFile(p)
-		desktopPicked.model, desktopPicked.from = strings.TrimSpace(string(b)), p
-	}
-	picked := desktopPicked.model
+	loadPicked()
+	picked, at := desktopPicked.model, desktopPicked.at
 	desktopPicked.Unlock()
-	for _, m := range chosen {
-		if picked != "" && strings.TrimSuffix(m, "[1m]") == strings.TrimSuffix(unprefixed(picked), "[1m]") {
+	// a turn sent after the menus last changed is the model the user is
+	// on now: a session switched to another model, or a menu still on the
+	// one it left
+	if picked != "" && at.After(newest) {
+		if m := unprefixed(picked); !unserved(m) {
 			return m
 		}
 	}
@@ -827,6 +853,10 @@ func desktopProbe(body []byte) bool {
 // of one (AnyRouter: "bad response status code 400") passes on no floor
 // to ask again at (tokenFloor). Desktop reads only whether it is answered.
 const desktopProbeTokens = 16
+
+// KindDesktopCheck is the kind a Claude Desktop check (desktopProbe) is
+// recorded with, so the Routing page and the ledger tell it from a turn.
+const KindDesktopCheck = "connection_check"
 
 // desktopTitlePrompt is how the system prompt Claude Desktop asks a
 // session's title and branch name with starts (dcr in its app.asar), sent

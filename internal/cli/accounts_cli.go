@@ -208,6 +208,12 @@ func accountsCmd(args []string) error {
 			fmt.Println(green.Render("✓"), "magpie now uses", args[3], "for", id)
 			return nil
 		}
+		if id == "codex" && provider.CodexNoAccount != nil && provider.CodexNoAccount() {
+			// Codex's provider takes no ChatGPT account: nothing running
+			// goes by it, and nothing needs a restart
+			fmt.Println(green.Render("✓"), id, "is now signed in as", args[3], muted.Render("· Codex's provider takes no ChatGPT account, so nothing needs restarting"))
+			return nil
+		}
 		fmt.Println(green.Render("✓"), id, "is now signed in as", args[3], muted.Render("· sessions already running keep their account until restarted"))
 		if id == "codex" {
 			if was := provider.CodexDaemonStale(); was != "" {

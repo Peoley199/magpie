@@ -421,7 +421,9 @@ service tier the client asked for (Claude's fast speed reads `fast`), the
 one that try went out at (a fast pick sends `priority`, or `ultrafast`
 where the pick is set to Ultrafast; Ultrafast becomes
 `priority` on an account whose plan doesn't offer it), and the one the
-vendor's reply said it ran at, empty when the reply doesn't say. The JSON
+vendor's reply said it ran at, empty when the reply doesn't say. The
+ChatGPT backend (Codex signed in with ChatGPT) says `auto` and `default`
+whether Fast ran or not, so from it those are left empty too. The JSON
 log keeps them as `tier_asked`, `tier_sent` and `tier_served`, and each
 try in `/v1/magpie/route` has `tier` and `tier_served`. The last column,
 `upstream_stop`, is why the upstream said its reply ended, in its own
@@ -684,6 +686,14 @@ Usage page this way (#1547). Requests from
 this computer that send no gateway key are not limited; a gateway key used
 from this computer is.
 
+A key's holder can also open **`/me`** in a browser at the address they
+reach the gateway at (for example `http://192.168.1.10:3999/me`), type
+their key, and see its own limits, its usage over today, 7 and 30 days, the
+models it may use, and copy-ready setup for Claude Code, Codex and any
+OpenAI-compatible client. It shows nothing of other keys, accounts or
+providers. Gateway → Gateway keys shows that address with a Copy button,
+so it can be handed out with the keys.
+
 A gateway key can also be held to some **models** (#882): pick them with the
 **All models** badge on the key's row, or run `magpie gateway-key models <id>
 openai/gpt-5 anthropic/*` (`all` takes the restriction off). A pattern is
@@ -921,7 +931,7 @@ so magpie gives each location the models it answered with on 2026-10-06
 
 | Location | Models |
 | --- | --- |
-| `global` | `gemini-3.8-flash`, `gemini-3.7-flash`, `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-4-argon`, `gemini-3.1-pro-preview`, `gemini-3.1-pro-preview-customtools`, `gemini-3.1-flash-lite`, `gemini-3-flash-preview`, `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite`, `deepseek-ai/deepseek-v4.1-flash-maas`, `zai-org/glm-5.2-maas`, `openai/gpt-oss-120b-maas` |
+| `global` | `gemini-3.8-flash`, `gemini-3.7-flash`, `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-4-argon`, `gemini-3.1-pro-preview`, `gemini-3.1-pro-preview-customtools`, `gemini-3.1-flash-lite`, `gemini-3-flash-preview`, `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite`, `deepseek-ai/deepseek-v4.1-flash-maas`, `zai-org/glm-5.2-maas`, `openai/gpt-oss-120b-maas`, `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5`, `claude-fable-5-1` |
 | `us`, `eu` | `gemini-3.8-flash`, `gemini-3.7-flash`, `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.1-flash-lite` |
 | A region | `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite` |
 
@@ -953,8 +963,19 @@ magpie provider models google-vertex gemini-3.8-flash deepseek-ai/deepseek-v4.1-
 Turn each partner model on for the project in Model Garden first: until then
 Google refuses it. `magpie provider test google-vertex` tests Gemini, and a
 partner model is tested on its own (right-click it in the app, or
-`magpie provider test google-vertex <model>`). Claude on Vertex AI isn't
-served: it takes a request of its own (`rawPredict`), not chat completions.
+`magpie provider test google-vertex <model>`).
+
+Anthropic's Claude is served too, with nothing more to set: a model whose id
+starts with `claude-` is asked on Anthropic's Messages API in your project
+(`…/locations/<location>/publishers/anthropic/models/<model>:streamRawPredict`,
+`:rawPredict` for one answer whole, `count-tokens:rawPredict` for Claude
+Code's token counts), as Claude Code asks it with `CLAUDE_CODE_USE_VERTEX`.
+Every agent can use it, whatever API it speaks. `global` lists the current
+models under the ids Claude Code gives them for Vertex AI; an older one goes
+under Vertex's id with its date, such as `claude-sonnet-4-5@20250929`, typed
+in as any model is. At another location (`us-east5`, `europe-west1`), type in
+the Claude models it serves. Turn each Claude model on in Model Garden first,
+as a partner model is, and test it on its own.
 
 Google's [Priority PayGo](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/priority-paygo)
 and [Flex PayGo](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/flex-paygo)
@@ -1524,6 +1545,9 @@ one provider serves it.
 `listed=no` (the group editor's **Model lists: The group alone**) keeps the
 models a group names, and those its patterns match, out of `magpie models`,
 `/v1/models` and every agent's list, so a client offers the group alone.
+A signed-in subscription's own models (a ChatGPT, Claude, Copilot or plugin
+account's) stay in every agent's list: the group is added on top of them,
+and only a client that is no agent is given the group alone.
 They are still served: the group routes over them, and a request naming one
 as `provider/model` is answered. A group in it keeps its own setting, and a
 group switched off keeps nothing out. `listed=yes` lists them again. To keep
@@ -1822,7 +1846,10 @@ shows the account it is signed in to; click it, and the *Switch accounts
 only* menu signs Claude Code in to another of them, with *Only switch
 Claude Code's sign-in* and *Manage accounts…* beside. The button says
 *Switched*, and a new Claude Code session uses the new account; one
-already open keeps its account until it is started again.
+already open keeps its account until it is started again. The tray panel
+has it too: set a key under Settings › General › Quick panel shortcut, press
+it from any app, open Claude Code's (or Codex's) row and click its
+*account* line.
 
 **How often an allowance is read.** Routing uses what was read last and
 never waits for a reading, except the first one after magpie starts (3

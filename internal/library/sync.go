@@ -3,6 +3,7 @@ package library
 import (
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"slices"
 
@@ -137,6 +138,10 @@ func syncSteps(all, gone []*Target, b *backups, res *Result) []func(*Library) {
 // first operations after opening magpie took seconds (#1624, Hipple).
 // It lets go after each agent's part, for whatever waits to go first.
 func Sync() (*Result, error) {
+	// a plugin's tools, a server of their own (plugin_tools.go)
+	if _, err := adoptPluginTools(); err != nil {
+		log.Printf("library: giving plugin tools a server: %v", err)
+	}
 	res := &Result{Changed: []string{}, Problems: []Problem{}}
 	b := newBackups()
 	var all, gone []*Target
@@ -524,6 +529,18 @@ func readView(problems []Problem, glance bool) (*View, error) {
 	if err != nil {
 		return nil, err
 	}
+	// a plugin's tools, a server of their own (plugin_tools.go): saved,
+	// and given to the agents by a sync of their own
+	if l.adoptPlugins() {
+		if err := l.save(); err != nil {
+			return nil, err
+		}
+		go func() {
+			if _, err := Sync(); err != nil {
+				log.Printf("library: syncing after plugin tools: %v", err)
+			}
+		}()
+	}
 	// the agents are found once for the whole read: finding them looks
 	// through every agent's folders, in WSL too (#1624)
 	targets, asleep := targetsAsleep(false)
@@ -706,6 +723,10 @@ func SaveServer(old string, s Server) (*Result, error) {
 			// the tools turned off stay, the editor not sending them
 			if s.DisabledTools == nil {
 				s.DisabledTools = l.MCP[i].DisabledTools
+			}
+			// a plugin's server stays the plugin's, and on this computer
+			if p := l.MCP[i].Plugin; p != "" && s.Plugin == "" {
+				s.Plugin, s.Local = p, true
 			}
 			l.MCP = slices.Delete(l.MCP, i, i+1)
 			if old != s.Name {

@@ -367,6 +367,12 @@ func lanGuard(next http.Handler) http.Handler {
 			http.Error(w, "magpie isn't shared on the local network", http.StatusForbidden)
 			return
 		}
+		// the key page itself is the same bytes for everyone, so it is
+		// opened before the key it asks for is typed; its data isn't
+		if remote && keyPageOpen(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if remote || managedKey(r) {
 			var ok bool
 			r, ok = identifyCaller(w, r)
@@ -572,6 +578,10 @@ func appendUsage(r *http.Request, rec usage.Record) {
 	rec.Local = local(r)
 	if r.Context().Value(observedKey{}) != nil {
 		rec.Watched = true
+	}
+	if !rec.IsProbe() {
+		// a request an MCP tool call made: its row names the model (mcpUse)
+		mcpUseOf(r.Context()).used(rec.Provider, rec.Model)
 	}
 	budget.Append(rec)
 }

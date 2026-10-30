@@ -77,7 +77,7 @@ const errHubOff = "magpie's MCP hub is off, so it runs no server's tools: turn i
 
 func (s *Server) hubMCP(w http.ResponseWriter, r *http.Request) {
 	agent := r.PathValue("agent")
-	serveMCP(w, r, "magpie's MCP hub", hubBody, func(r *http.Request, m mcpMessage) (any, map[string]any) {
+	serveMCP(w, r, "magpie's MCP hub", "magpie", hubBody, func(r *http.Request, m mcpMessage) (any, map[string]any) {
 		return s.hubMCPCall(r, agent, m)
 	})
 }
@@ -180,6 +180,10 @@ func (s *Server) hubMCPCall(r *http.Request, agent string, m mcpMessage) (any, m
 // limit. A server that is down or doesn't answer in time is an error
 // result naming it, never a wait past the client's.
 func (s *Server) hubMCPRun(r *http.Request, agent string, t hubTool, args json.RawMessage) any {
+	// the request log names the Library's server, and the agent the hub is mounted for
+	use := mcpUseOf(r.Context())
+	use.on(t.Server)
+	use.as(agent)
 	release, err := reserveFor(access.Caller(r.Context()), int64(len(args)), "", limitClock())
 	if err != nil {
 		return toolResult(err.Error(), true)

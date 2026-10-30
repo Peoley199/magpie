@@ -56,6 +56,12 @@ type Settings struct {
 	NoBird bool   `json:"noBird,omitempty"`
 	Lang   string `json:"lang,omitempty"` // system | en | zh
 	Tray   string `json:"tray,omitempty"` // what clicking the tray icon opens: panel | window
+	// PanelShortcut is the key combination that opens the tray's quick
+	// panel from any app (ben hanks on Discord), as Wails names it
+	// ("Cmd+Shift+M"); "" is none, the default, so nothing clashes until
+	// the user records one. This computer's own (KeepOwn): a Mac's Cmd is
+	// another keyboard's Win key, and what is free differs per computer.
+	PanelShortcut string `json:"panelShortcut,omitempty"`
 	// SessionTerminal is the Mac app that opens a resumed session, by bundle
 	// id. "" and "system" follow the .command file association. This
 	// computer's own (KeepOwn): another Mac may not have that app.
@@ -471,6 +477,14 @@ type Settings struct {
 	// no cards say the tokens alone (BussanQ on Discord); off by default,
 	// the cost shown.
 	TrayNoCost bool `json:"trayNoCost,omitempty"`
+	// TrayWindows are, by subscription or plan (a provider's id, every
+	// account of it alike), the windows its menu bar card shows, each by
+	// how long it runs ("5h", "7d", "month": gui.trayWindowKind), so a
+	// vendor reordering or renaming them changes nothing (StrikingRaw on
+	// X: Claude's 5h alone, not two small numbers). A provider not named
+	// shows every window, as before; one whose named windows are all gone
+	// shows every window too, never an empty card.
+	TrayWindows map[string][]string `json:"trayWindows,omitempty"`
 	// Lightweight lets the webview of a window closed — the tray panel or
 	// the main window — go once it has stayed closed a while, and makes it
 	// again when it is opened (#580): less memory, a moment's wait. This
@@ -842,6 +856,14 @@ type Settings struct {
 	// when it last settled, so it opens maximised again; Window is still the
 	// size it is restored to.
 	WindowMaximised bool `json:"windowMaximised,omitempty"`
+	// WindowAt is where the main window was last left, its top left corner
+	// x and y in the system's coordinates across every screen (points on
+	// the Mac, DIPs on Windows, X11's pixels on Linux), so it opens there
+	// again after a restart rather than in the middle (jorbenzhu on
+	// Discord). Kept only while it isn't maximised, full screen or
+	// minimised; not at all under Wayland, where a window can't place
+	// itself. gui's openAt moves it onto a screen there now.
+	WindowAt []int `json:"windowAt,omitempty"`
 }
 
 // ModelPrice is the price of one model as the user states it. Each part is a
@@ -1166,13 +1188,13 @@ func (s Settings) Compact() int {
 }
 
 // KeepOwn puts back cur's settings that are this computer's own, which a
-// sync or a restored backup never brings from another: the window's size
-// and whether it was maximised, the proxy, the gateway's port, whether it
+// sync or a restored backup never brings from another: the window's size,
+// place and whether it was maximised, the proxy, the gateway's port, whether it
 // is shared on the local network and the addresses let in to it, the
 // Dock, gateway mode, whether WSL is looked in, whether agents' sign-ins
 // are read, when allowances are read, the terminal app a session resumes
-// in, whether the local masking model is on (it is downloaded on this
-// computer alone), how many Claude Code processes may run (its memory),
+// in, the quick panel's shortcut, whether the local masking model is on
+// (it is downloaded on this computer alone), how many Claude Code processes may run (its memory),
 // and what the menu bar or tray shows beside magpie's icon (yoooo on
 // Discord: usage turned off on a Mac came back from a Windows box that
 // shows it; Lullaby: sharing turned on at home came on at work).
@@ -1184,7 +1206,9 @@ func (s *Settings) KeepOwn(cur Settings) {
 	s.DockNever, s.DockSettled = cur.DockNever, cur.DockSettled
 	s.ProxyCustom = cur.ProxyCustom
 	s.WindowMaximised, s.KeepAwake, s.KeepAwakeDisplay = cur.WindowMaximised, cur.KeepAwake, cur.KeepAwakeDisplay
+	s.WindowAt = cur.WindowAt
 	s.TrayUsages, s.TrayUsage, s.TrayUsageEvery, s.TrayNoLogos, s.TrayNoBird, s.TrayPace, s.TrayNoCost = cur.TrayUsages, cur.TrayUsage, cur.TrayUsageEvery, cur.TrayNoLogos, cur.TrayNoBird, cur.TrayPace, cur.TrayNoCost
+	s.TrayWindows = cur.TrayWindows
 	s.GatewayMode = cur.GatewayMode
 	s.NoWSLAgents = cur.NoWSLAgents
 	s.QuotaReads = cur.QuotaReads
@@ -1192,6 +1216,7 @@ func (s *Settings) KeepOwn(cur Settings) {
 	s.LAN, s.AllowIPs = cur.LAN, cur.AllowIPs
 	s.FetchPrivate = cur.FetchPrivate
 	s.SessionTerminal = cur.SessionTerminal
+	s.PanelShortcut = cur.PanelShortcut
 	s.RedactModel, s.RedactModelName, s.RedactModelScore = cur.RedactModel, cur.RedactModelName, cur.RedactModelScore
 	s.RedactModelOff, s.RedactModelAuto = cur.RedactModelOff, cur.RedactModelAuto
 	s.ClaudeRunsMost = cur.ClaudeRunsMost
@@ -1813,6 +1838,7 @@ func saveOwn(s Settings, recording, reads bool) error {
 	s.ClientAgents = clientAgents(s.ClientAgents)
 	s.UsageCleared = usageCleared(s.UsageCleared)
 	s.TrayUsages = ids(s.TrayUsages)
+	s.TrayWindows = trayWindows(s.TrayWindows)
 	for i, u := range s.CodexAutoReset {
 		s.CodexAutoReset[i] = strings.ToLower(u)
 	}
@@ -2012,6 +2038,21 @@ func ids(in []string) []string {
 		if x = strings.TrimSpace(x); x != "" && !slices.Contains(out, x) {
 			out = append(out, x)
 		}
+	}
+	return out
+}
+
+// trayWindows is TrayWindows as kept: each provider's kinds trimmed, once
+// each, and a provider with none left out, as it shows every window.
+func trayWindows(m map[string][]string) map[string][]string {
+	out := map[string][]string{}
+	for p, kinds := range m {
+		if p, kinds = strings.TrimSpace(p), ids(kinds); p != "" && len(kinds) > 0 {
+			out[p] = kinds
+		}
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }

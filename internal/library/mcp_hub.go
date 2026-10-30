@@ -174,7 +174,13 @@ func (theHub) Tools(ctx context.Context, agentID string) []gateway.HubTool {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			ts, err := backendOf(s).tools(ctx)
+			var ts []map[string]json.RawMessage
+			var err error
+			if s.Plugin != "" {
+				ts, err = pluginHubTools(ctx, s)
+			} else {
+				ts, err = backendOf(s).tools(ctx)
+			}
 			if err != nil {
 				return
 			}
@@ -207,6 +213,9 @@ func (theHub) Call(ctx context.Context, agentID, server, tool string, args json.
 	s := ss[i]
 	if slices.Contains(s.DisabledTools, tool) {
 		return nil, errors.New("the tool is turned off in magpie's Library")
+	}
+	if s.Plugin != "" {
+		return pluginHubCall(ctx, agentID, s, tool, args)
 	}
 	return backendOf(s).call(ctx, tool, args)
 }

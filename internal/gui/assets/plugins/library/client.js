@@ -1016,6 +1016,8 @@ magpie.plugin("library", (ctx) => {
       if (a.noHook) row.append(tag(t("No RTK hook"), "warn", rtkNoHookWhy(a)));
       // RTK before 0.51 installs Antigravity's hook only per project
       else if (a.blocked && kind === "agy") row.append(tag(t("Update RTK"), "warn", t("{agent}'s hook needs RTK 0.51 or newer: older ones install it only per project. Update RTK (brew upgrade rtk, or its installer again), then switch it on.", { agent: a.name })));
+      // RTK before 0.44 has no Droid agent
+      else if (a.blocked && kind === "droid") row.append(tag(t("Update RTK"), "warn", t("{agent}'s hook needs RTK 0.44 or newer: older ones have no hook for it. Update RTK (brew upgrade rtk, or its installer again), then switch it on.", { agent: a.name })));
       else if (a.blocked && kind !== "opencode") row.append(tag(t("Update RTK"), "warn", t("{agent}'s hook needs RTK 0.50 or newer: older ones only add @RTK.md to AGENTS.md, which rewrites no command. Update RTK (brew upgrade rtk, or its installer again), then switch it on.", { agent: a.name })));
       // OpenCode 2 loads only the plugin RTK 0.52 on writes (rtk-ai/rtk#4187);
       // an older one's, already there, can be switched off
@@ -1041,6 +1043,10 @@ magpie.plugin("library", (ctx) => {
       case "dsh": return t("RTK can't be given to {agent} yet: RTK works by rewriting the shell command an agent is about to run, and {agent}'s hooks can only allow or deny a command, not change it. RTK's installer has no option for it either (github.com/rtk-ai/rtk/issues/3847).", { agent });
       case "grok": return t("RTK can't be given to {agent} yet: RTK's installer has no option for Grok Build (github.com/rtk-ai/rtk/issues/2136).", { agent });
       case "grok-app": return t("RTK can't be given to {agent} yet: {agent} runs Grok Build, and RTK's installer has no option for Grok Build (github.com/rtk-ai/rtk/issues/2136).", { agent });
+      case "qoder": return t("RTK can't be given to {agent} yet: RTK's installer has no option for Qoder (github.com/rtk-ai/rtk/issues/1327).", { agent });
+      case "qoder-cn": return t("RTK can't be given to {agent} yet: {agent} is Qoder's China build, and RTK's installer has no option for Qoder (github.com/rtk-ai/rtk/issues/1327).", { agent });
+      case "cline": return t("RTK can't be given to {agent} yet: RTK's installer only writes a .clinerules into one project, asking the model to type rtk itself, and has nothing for every project (github.com/rtk-ai/rtk/issues/3841).", { agent });
+      case "kimi": return t("RTK can't be given to {agent}: {agent}'s hooks can only allow or deny a command, not change it, so RTK's installer only adds instructions to one project's AGENTS.md and has nothing for every project.", { agent });
       default: return t("RTK can't be given to {agent} yet: RTK has no hook for it.", { agent });
     }
   }

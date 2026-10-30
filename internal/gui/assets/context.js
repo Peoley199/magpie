@@ -40,7 +40,8 @@
     return s[s.length >> 1];
   };
   const agentMeta = (id) => (state.clients || state.agents || []).find((a) => a.id === id);
-  const agentLabel = (id) => agentMeta(id)?.name || id || t("your agent");
+  // "scripts": requests naming only a library (context.go's scriptsAgent)
+  const agentLabel = (id) => (id === "scripts" ? t("Scripts") : agentMeta(id)?.name || id || t("your agent"));
   const agentIcon = (id) => icon(agentMeta(id)?.icon || "generic");
 
   // what an item of the prompt is called: a file's path or a tool's name
@@ -179,12 +180,10 @@
     return box;
   }
 
-  // A card's narrow layouts go by its own width, as container queries
-  // would, set here as classes (max520: 520px wide or less). Not by
-  // container queries: WebKit pulled a view scrolled to its end back up by
-  // a card's height each time the card was drawn again (#1249). A card
-  // drawn again starts with the width the last one in its place had, so it
-  // doesn't lay out wide for a moment and pull the page up as it narrows
+  // Narrow layouts go by the card's own width, as classes (max520), not
+  // container queries: WebKit pulled a view scrolled to its end up by a
+  // card's height on each redraw (#1249). A redrawn card starts at the last
+  // width in its place, so it never lays out wide and pulls the page up
   const cardWidth = {};
   const sizeCard = (card, w) => {
     card.classList.toggle("max520", w <= 520);
@@ -202,12 +201,10 @@
     }
   });
 
-  // morph makes old what neu is, keeping old's nodes wherever they are of
-  // the same kind: a card drawn again for the next request is patched in
-  // place, not put in afresh (Zhenzhen on Discord: each live request
-  // flashed the whole card, its cells coming in again). Handlers set as
-  // properties come along; one added with addEventListener wouldn't, so
-  // nothing morphed has one.
+  // morph makes old what neu is, keeping old's nodes of the same kind: a
+  // redrawn card is patched in place (Zhenzhen on Discord: each live
+  // request flashed the whole card). Only handlers set as properties come
+  // along, so nothing morphed uses addEventListener.
   const HANDLERS = ["onclick", "onpointerenter", "onpointerleave", "onkeydown"];
   function morph(old, neu) {
     if (old.nodeName !== neu.nodeName || (old.nodeType !== 1 && old.nodeType !== 3)) { old.replaceWith(neu); return neu; }
@@ -386,14 +383,12 @@
   // ctxCard draws a route's prompt. opts: series (the session's prompts,
   // [{id, tokens, time}]), onPoint (a point of it clicked), cache ({read,
   // total}, when the route carries no usage), crumbs (the footer's path),
-  // place (where it is drawn, for its width: see cardWidth). The card's
-  // ctxUpdate(r, opts) draws another route, or the same one further on, in
-  // it: what is the same stays the same nodes, its grid's cells among them,
-  // so nothing flashes or comes in again and the grid keeps its height
-  // a card that folds (Routing's, opts.foldable) keeps the reader's
-  // choice: folded, it is its head alone, with how full the window is
-  // beside the title, so the request list under it has the room
-  // (0xBCD18E on X: it took most of the height, three rows were left)
+  // place (for its width: see cardWidth). The card's ctxUpdate(r, opts)
+  // draws another route in it, keeping the nodes that are the same (grid
+  // cells too), so nothing flashes and the grid keeps its height.
+  // A foldable card (Routing's) keeps the reader's choice: folded, it is its
+  // head alone with how full the window is, so the request list has room
+  // (0xBCD18E on X: it took most of the height)
   let ctxShut = false;
   try { ctxShut = localStorage.getItem("magpie.ctxShut") === "1"; } catch {}
   // opts.open: this request was opened to see its context window (the
@@ -1185,7 +1180,9 @@
     const head = el("div", "ctx-agent-head");
     const who = el("div", "ctx-who");
     who.append(agentIcon(a.agent), el("b", "", agentLabel(a.agent)));
-    const meta = el("div", "ctx-who-sub", [count(a.requests, "1 request", "{n} requests"), count(a.sessions, "1 session", "{n} sessions")].join(" · "));
+    const cl = a.clients || [];
+    const meta = el("div", "ctx-who-sub", [...(cl.length ? [cl.slice(0, 3).join(", ") + (cl.length > 3 ? " +" + (cl.length - 3) : "")] : []), count(a.requests, "1 request", "{n} requests"), count(a.sessions, "1 session", "{n} sessions")].join(" · "));
+    if (cl.length) who.title = t("Requests whose User-Agent names only an HTTP library or an SDK, not an agent: {clients}", { clients: cl.join(", ") });
     const name = el("div", "ctx-who-box");
     name.append(who, meta);
     const [tone, word] = grade(a.score);
@@ -1255,7 +1252,7 @@
       const go = el("button", "text", t("Latest request"));
       go.type = "button";
       go.dataset.feature = "routing"; // it opens on the Routing page
-      go.onclick = () => window.openRoute(a.latestId, a.latestTime, { context: true }).catch((e) => status(e.message, "err"));
+      go.onclick = () => window.openRoute(a.latestId, a.latestTime, { context: true }).catch(statusErr);
       foot.append(go);
     }
     card.append(head, scores, tags, facts, mix, foot);
@@ -1291,7 +1288,7 @@
         still: true, cache, place: "session",
         series: s.points,
         crumbs: [agentLabel(s.agent), s.title || s.key.slice(0, 12), t("latest request")],
-        onPoint: (pt) => { if (!featuresOff.has("routing")) window.openRoute(pt.id, pt.time, { context: true }).catch((e) => status(e.message, "err")); },
+        onPoint: (pt) => { if (!featuresOff.has("routing")) window.openRoute(pt.id, pt.time, { context: true }).catch(statusErr); },
       }));
     }
     return box;
@@ -1516,7 +1513,7 @@
         await api("tune/" + path, { agent, knob: a.knob, model: a.model || "", value: String(value ?? "") });
         status(path === "apply" ? t("Saved: {agent} reads it from its next session", { agent: agentLabel(agent) }) : t("Put back"), "ok");
       } catch (e) {
-        status(e.message, "err");
+        statusErr(e);
       }
       tuneBusy = "";
       await loadTune(true);
@@ -1683,7 +1680,7 @@
     if (tuneData && tuneData.days !== +days) tuneData = null;
     if (ctxData && ctxData.days !== +days) ctxData = null;
     if (!ctxData && (ctxWaiting !== days || !$("#contextPane")?.childElementCount)) { ctxWaiting = days; renderContext(); }
-    loadTune().catch((e) => status(e.message, "err"));
+    loadTune().catch(statusErr);
     const data = await api("context?days=" + days);
     if (read !== ctxRead) return;
     // the auto refresh redraws only what changed: the same answer keeps the

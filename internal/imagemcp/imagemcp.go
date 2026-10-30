@@ -144,10 +144,12 @@ type job struct {
 	done     chan struct{}
 	text     string
 	err      error
+	// model is the one the gateway named, provider/model: set by run
+	model string
 }
 
 // start runs run as a job of tool.
-func (s *server) start(tool string, run func() (string, error)) *job {
+func (s *server) start(tool string, run func(*job) (string, error)) *job {
 	s.mu.Lock()
 	if s.jobs == nil {
 		s.jobs = map[string]*job{}
@@ -159,7 +161,7 @@ func (s *server) start(tool string, run func() (string, error)) *job {
 	s.running.Add(1)
 	go func() {
 		defer s.running.Done()
-		j.text, j.err = run()
+		j.text, j.err = run(j)
 		close(j.done)
 	}()
 	return j
@@ -286,6 +288,9 @@ func (s *server) serve(r io.Reader) error {
 func (s *server) handle(req rpc) {
 	var result any
 	var rpcErr any
+	began := time.Now()
+	var called *gateway.MCPCalled // a tool call, for the gateway's request log
+	var j *job
 	switch req.Method {
 	case "initialize":
 		var p struct {
@@ -330,7 +335,7 @@ func (s *server) handle(req rpc) {
 			rpcErr = map[string]any{"code": -32602, "message": "unknown tool " + p.Name}
 			break
 		}
-		var j *job
+		called = &gateway.MCPCalled{Tool: p.Name}
 		if p.Name == resultTool {
 			var a struct {
 				ID string `json:"id"`
@@ -348,7 +353,7 @@ func (s *server) handle(req rpc) {
 			if p.Name == videoTool {
 				generate = s.film
 			}
-			j = s.start(p.Name, func() (string, error) { return generate(p.Arguments) })
+			j = s.start(p.Name, func(j *job) (string, error) { return generate(p.Arguments, &j.model) })
 		}
 		if !s.await(j, p.Meta.ProgressToken) {
 			result = map[string]any{"content": []any{map[string]any{"type": "text", "text": stillGoing(j)}}}
@@ -369,6 +374,37 @@ func (s *server) handle(req rpc) {
 		out["result"] = result
 	}
 	s.send(out)
+	if called != nil {
+		called.Millis = time.Since(began).Milliseconds()
+		if j != nil {
+			select {
+			case <-j.done:
+				called.Model = j.model
+			default: // still being made: the model isn't known yet
+			}
+		}
+		if res, _ := result.(map[string]any); res["isError"] == true {
+			called.Error = "failed"
+			if c, _ := res["content"].([]any); len(c) > 0 {
+				if t, _ := c[0].(map[string]any)["text"].(string); t != "" {
+					called.Error = t
+				}
+			}
+		}
+		s.report(*called)
+	}
+}
+
+// report tells the gateway of a tool call this server answered, for its
+// request log (gateway.MCPCalledMethod): in the background, after the
+// answer, and a gateway that can't take it (not running, an older magpie)
+// is let be. The call's arguments are never sent.
+func (s *server) report(c gateway.MCPCalled) {
+	s.running.Add(1)
+	go func() {
+		defer s.running.Done()
+		s.ask(gateway.MCPCalledMethod, c)
+	}()
 }
 
 type args struct {
@@ -383,8 +419,9 @@ type args struct {
 }
 
 // generate asks the gateway for the images and saves them; what it says is
-// where they are.
-func (s *server) generate(raw json.RawMessage) (string, error) {
+// where they are. used, when not nil, is set to the model the gateway
+// named, provider/model.
+func (s *server) generate(raw json.RawMessage, used *string) (string, error) {
 	var a args
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return "", err
@@ -450,6 +487,9 @@ func (s *server) generate(raw json.RawMessage) (string, error) {
 		} `json:"error"`
 	}
 	json.Unmarshal(data, &out)
+	if used != nil {
+		*used = out.Model
+	}
 	if res.StatusCode != 200 {
 		msg := strings.TrimSpace(string(data))
 		if out.Error != nil && out.Error.Message != "" {
@@ -785,8 +825,9 @@ func gatewaySaid(data []byte) string {
 }
 
 // film asks the gateway to make a video, waits for it and saves it; what
-// it says is where it is.
-func (s *server) film(raw json.RawMessage) (string, error) {
+// it says is where it is. used, when not nil, is set to the model the
+// gateway named, provider/model.
+func (s *server) film(raw json.RawMessage, used *string) (string, error) {
 	var a filmArgs
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return "", err
@@ -850,6 +891,9 @@ func (s *server) film(raw json.RawMessage) (string, error) {
 	}
 	if json.Unmarshal(data, &v) != nil || v.ID == "" {
 		return "", fmt.Errorf("no video: the gateway's answer has no id: %s", gatewaySaid(data))
+	}
+	if used != nil {
+		defer func() { *used = v.Model }()
 	}
 	id, deadline := v.ID, time.Now().Add(videoWait)
 	for v.Status != "completed" {

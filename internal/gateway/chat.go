@@ -321,6 +321,7 @@ func chatReplaysReasoning(host, model string) bool {
 }
 
 func buildChat(r *Request, model, host string, rejectTemp bool) []byte {
+	r = responseInstructions(r)
 	var msgs []map[string]any
 	if r.System != "" {
 		msgs = append(msgs, map[string]any{"role": "system", "content": r.System})
@@ -525,7 +526,7 @@ func buildChat(r *Request, model, host string, rejectTemp bool) []byte {
 		out["service_tier"] = r.Tier
 	}
 	if r.MaxTokens > 0 {
-		if strings.HasSuffix(host, "openai.com") {
+		if provider.OpenAIHost(host) {
 			out["max_completion_tokens"] = r.MaxTokens
 		} else {
 			out["max_tokens"] = r.MaxTokens

@@ -204,6 +204,11 @@ type Price struct {
 	// output above 272K), lowest first. models.dev lists them as "tiers" of
 	// type "context".
 	Tiers []Tier `json:"tiers,omitempty"`
+	// Peak, when set, says this is an off-peak price, billed at PeakFactor
+	// times it in Peak's hours (Price.In): a DeepSeek model's list price at
+	// a provider that bills by DeepSeek's hours. A price the user set has
+	// none.
+	Peak Peak `json:"peak,omitempty"`
 }
 
 // Tier is a price from a request's input size on: what the whole request
@@ -288,7 +293,7 @@ func OneHourFor(id string, p *Price) {
 
 // Times is the price at r times each of its parts.
 func (p Price) Times(r float64) Price {
-	out := Price{Input: p.Input * r, Output: p.Output * r, CacheRead: p.CacheRead * r, CacheWrite: p.CacheWrite * r, CacheWrite1h: p.CacheWrite1h * r}
+	out := Price{Input: p.Input * r, Output: p.Output * r, CacheRead: p.CacheRead * r, CacheWrite: p.CacheWrite * r, CacheWrite1h: p.CacheWrite1h * r, Peak: p.Peak}
 	for _, t := range p.Tiers {
 		out.Tiers = append(out.Tiers, Tier{Above: t.Above, Input: t.Input * r, Output: t.Output * r, CacheRead: t.CacheRead * r, CacheWrite: t.CacheWrite * r, CacheWrite1h: t.CacheWrite1h * r})
 	}
@@ -298,7 +303,7 @@ func (p Price) Times(r float64) Price {
 // Same is whether two prices are the same in every part and tier.
 func (p Price) Same(q Price) bool {
 	return p.Input == q.Input && p.Output == q.Output && p.CacheRead == q.CacheRead && p.CacheWrite == q.CacheWrite &&
-		p.CacheWrite1h == q.CacheWrite1h && slices.Equal(p.Tiers, q.Tiers)
+		p.CacheWrite1h == q.CacheWrite1h && slices.Equal(p.Tiers, q.Tiers) && p.Peak == q.Peak
 }
 
 // At is the flat price a request whose input, cached and cache-written
@@ -306,10 +311,10 @@ func (p Price) Same(q Price) bool {
 // tier it is over, else the base price. OpenAI counts a request's input
 // with its cached tokens in it, and bills the whole request at the tier.
 func (p Price) At(prompt int) Price {
-	flat := Price{Input: p.Input, Output: p.Output, CacheRead: p.CacheRead, CacheWrite: p.CacheWrite, CacheWrite1h: p.CacheWrite1h}
+	flat := Price{Input: p.Input, Output: p.Output, CacheRead: p.CacheRead, CacheWrite: p.CacheWrite, CacheWrite1h: p.CacheWrite1h, Peak: p.Peak}
 	for _, t := range p.Tiers {
 		if prompt > t.Above {
-			flat = Price{Input: t.Input, Output: t.Output, CacheRead: t.CacheRead, CacheWrite: t.CacheWrite, CacheWrite1h: t.CacheWrite1h}
+			flat = Price{Input: t.Input, Output: t.Output, CacheRead: t.CacheRead, CacheWrite: t.CacheWrite, CacheWrite1h: t.CacheWrite1h, Peak: p.Peak}
 		}
 	}
 	return flat

@@ -69,15 +69,15 @@ func gatewayDays(g usage.GatewaySession) []sessions.ExternalDayUsage {
 
 // gatewayListed is a gateway session as a list shows it: titled by what it
 // was first asked, when magpie recorded it, not by its ses_… id (YOU on
-// Discord)
-func gatewayListed(g usage.GatewaySession) sessions.ExternalSession {
+// Discord). title is a sessions.GatewayTitler's.
+func gatewayListed(g usage.GatewaySession, title func(agent, id string) string) sessions.ExternalSession {
 	e := gatewayExternal(g)
-	e.Title = sessions.GatewayTitle(g.Agent, g.ID)
+	e.Title = title(g.Agent, g.ID)
 	return e
 }
 
 func gatewaySession(g usage.GatewaySession) sessions.Session {
-	return sessions.MergeExternal(nil, []sessions.ExternalSession{gatewayListed(g)})[0]
+	return sessions.MergeExternal(nil, []sessions.ExternalSession{gatewayListed(g, sessions.GatewayTitle)})[0]
 }
 
 func sessionRoutes(mux *http.ServeMux, w Windows) {
@@ -108,18 +108,16 @@ func sessionRoutes(mux *http.ServeMux, w Windows) {
 		list := sessions.List(sessions.All)
 		nativeKeys := make(map[string]bool, len(list))
 		for _, s := range list {
+			// its copies' and subagents' ids among them
 			for _, k := range sessions.GatewayKeys(s) {
 				nativeKeys[k] = true
-			}
-			// a copy of its conversation is the agent's own too
-			for _, id := range s.Copies {
-				nativeKeys[s.Agent+"|"+id] = true
 			}
 		}
 		gateway := listedGateway(usage.GatewaySessions(time.Time{}, nativeKeys))
 		ext := make([]sessions.ExternalSession, 0, len(gateway))
+		title := sessions.GatewayTitler()
 		for _, g := range gateway {
-			ext = append(ext, gatewayListed(g))
+			ext = append(ext, gatewayListed(g, title))
 		}
 		list = sessions.MergeExternal(list, ext)
 		if len(list) > n {
@@ -146,8 +144,10 @@ func sessionRoutes(mux *http.ServeMux, w Windows) {
 		// was copied through every size on the way, ~140 MB of eight (#2278)
 		out.Sessions = make([]sessionJSON, 0, len(list))
 		for _, s := range list {
+			// drawn as the agent it ran in: Claude Desktop's Code tab's
+			// sessions are in Claude Code's folder (Session.App)
 			j := sessionJSON{Session: s, Name: s.Agent, Icon: "generic", Via: viaOf(vias, s)}
-			if a := agents[s.Agent]; a != nil {
+			if a := agents[cmp.Or(s.App, s.Agent)]; a != nil {
 				j.Name, j.Icon = a.SharedName(), a.Icon
 			}
 			j.Name = wslName(j.Name, s)
@@ -190,10 +190,7 @@ func sessionRoutes(mux *http.ServeMux, w Windows) {
 			rw.WriteHeader(http.StatusOK)
 			return
 		}
-		tag := writeJSONSame(rw, r, struct {
-			sessions.Stats
-			Agents map[string]string `json:"agents"`
-		}{st, agents})
+		tag := writeSame(rw, r, func(b *bytes.Buffer) error { return statsAnswer(b, st, agents) })
 		if tag != "" {
 			statsTags.Lock()
 			if statsTags.m == nil || len(statsTags.m) >= statsMemoMost {
@@ -267,7 +264,7 @@ func sessionRoutes(mux *http.ServeMux, w Windows) {
 		}
 		j := sessionJSON{Session: s, Name: s.Agent, Icon: "generic"}
 		for _, a := range agent.Clients() {
-			if a.ID == s.Agent {
+			if a.ID == cmp.Or(s.App, s.Agent) {
 				j.Name, j.Icon = a.SharedName(), a.Icon
 			}
 		}
@@ -608,8 +605,9 @@ func withGatewaySessions(st sessions.Stats, days int, nativeKeys map[string]bool
 	}
 	gs, gd := usage.GatewaySessionWindowExcept(since, nativeKeys)
 	ext := make([]sessions.ExternalSession, 0, len(gs))
+	title := sessions.GatewayTitler()
 	for _, g := range gs {
-		e := gatewayListed(g)
+		e := gatewayListed(g, title)
 		e.Daily = gatewayDays(g)
 		ext = append(ext, e)
 	}
@@ -788,5 +786,55 @@ func viaOf(x usage.ViaIndex, s sessions.Session) []usage.Via {
 			return v
 		}
 	}
+	return nil
+}
+
+// statsAnswer writes the stats answer into b as an Encoder of
+// struct{ sessions.Stats; Agents } does, its days one at a time: encoded
+// whole, the Encoder's own buffer grew to the ~6 MB answer from nothing
+// after each collection, ~200 MB of 90 s of polls while an agent worked
+// (#2278).
+func statsAnswer(b *bytes.Buffer, st sessions.Stats, agents map[string]string) error {
+	enc := json.NewEncoder(b)
+	// v as Marshal writes it: Encode ends it with a newline
+	put := func(v any) error {
+		if err := enc.Encode(v); err != nil {
+			return err
+		}
+		b.Truncate(b.Len() - 1)
+		return nil
+	}
+	b.WriteString(`{"from":`)
+	if err := put(st.From); err != nil {
+		return err
+	}
+	b.WriteString(`,"to":`)
+	if err := put(st.To); err != nil {
+		return err
+	}
+	b.WriteString(`,"days":`)
+	if st.Days == nil {
+		b.WriteString("null")
+	} else {
+		b.WriteByte('[')
+		for i := range st.Days {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			if err := put(&st.Days[i]); err != nil {
+				return err
+			}
+		}
+		b.WriteByte(']')
+	}
+	b.WriteString(`,"keys":`)
+	if err := put(st.Keys); err != nil {
+		return err
+	}
+	b.WriteString(`,"agents":`)
+	if err := put(agents); err != nil {
+		return err
+	}
+	b.WriteString("}\n")
 	return nil
 }

@@ -25,24 +25,39 @@ type codexAppStub struct {
 	listErr  error
 	endErr   error
 	turnOpen bool
-	ended    []int
-	// next: the app-server the app starts after one is ended
-	next int
+	// written: a Codex session file was written in the last
+	// codexTurnStuckAfter
+	written bool
+	ended   []int
+	// next: the app-server the app starts after one is ended; none when
+	// noNext (its stdout held open, the Windows app starts no other)
+	next   int
+	noNext bool
 }
 
 func stubCodexApp(t *testing.T) *codexAppStub {
 	t.Helper()
 	s := &codexAppStub{known: true, next: 100}
 	oldOn, oldList, oldEnd, oldTurn := CodexAppRoute, codexAppServersOn, endCodexAppServer, codexTurnRunning
-	t.Cleanup(func() {
-		CodexAppRoute, codexAppServersOn, endCodexAppServer, codexTurnRunning = oldOn, oldList, oldEnd, oldTurn
+	oldOpen, oldReopen, oldQuiet := CodexAppOpen, CodexAppReopen, codexSessionsQuiet
+	reset := func() {
 		codexApp.Lock()
 		codexApp.seen, codexApp.route, codexApp.stale, codexApp.stuck, codexApp.switched = false, "", nil, false, false
+		codexApp.ended, codexApp.backBy, codexApp.spent = nil, time.Time{}, false
 		codexApp.Unlock()
+	}
+	t.Cleanup(func() {
+		CodexAppRoute, codexAppServersOn, endCodexAppServer, codexTurnRunning = oldOn, oldList, oldEnd, oldTurn
+		CodexAppOpen, CodexAppReopen, codexSessionsQuiet = oldOpen, oldReopen, oldQuiet
+		reset()
 	})
-	codexApp.Lock()
-	codexApp.seen, codexApp.route, codexApp.stale, codexApp.stuck, codexApp.switched = false, "", nil, false, false
-	codexApp.Unlock()
+	reset()
+	// the app as tests find it: open, and never reopened
+	CodexAppOpen = func(context.Context) (bool, bool) { return true, true }
+	CodexAppReopen = func(context.Context) error {
+		t.Error("the Codex app reopened")
+		return errors.New("not in this test")
+	}
 	CodexAppRoute = func() (string, bool, bool) {
 		r := s.route
 		if s.on {
@@ -63,12 +78,17 @@ func stubCodexApp(t *testing.T) *codexAppStub {
 		s.ended = append(s.ended, pid)
 		// the app starts another app-server, which reads the provider anew
 		if i := slices.Index(s.running, pid); i >= 0 {
-			s.running[i] = s.next
-			s.next++
+			if s.noNext {
+				s.running = slices.Delete(s.running, i, i+1)
+			} else {
+				s.running[i] = s.next
+				s.next++
+			}
 		}
 		return nil
 	}
 	codexTurnRunning = func(string, time.Time, time.Time) bool { return s.turnOpen }
+	codexSessionsQuiet = func(string, time.Time, time.Duration) bool { return !s.written }
 	return s
 }
 
@@ -576,13 +596,22 @@ func TestRestartCodexAppEndsOnlyItsServer(t *testing.T) {
 		{PID: 5, Args: "/opt/homebrew/bin/codex app-server"},
 		{PID: 6, Args: bundle + "/Contents/Resources/codex exec-server --remote x"},
 	}
-	oldList, oldEnd, oldWait := listProcesses, endCodexAppServer, codexAppGoneWait
-	t.Cleanup(func() { listProcesses, endCodexAppServer, codexAppGoneWait = oldList, oldEnd, oldWait })
+	oldList, oldEnd, oldWait, oldBack, oldPoll := listProcesses, endCodexAppServer, codexAppGoneWait, codexAppBackWait, codexAppPoll
+	t.Cleanup(func() {
+		listProcesses, endCodexAppServer, codexAppGoneWait, codexAppBackWait, codexAppPoll = oldList, oldEnd, oldWait, oldBack, oldPoll
+	})
+	codexAppPoll = time.Millisecond
 	listProcesses = func(context.Context) ([]proc.Process, error) { return slices.Clone(ps), nil }
 	var ended []int
+	respawn := true
 	endCodexAppServer = func(pid int) error {
 		ended = append(ended, pid)
-		ps = slices.DeleteFunc(ps, func(p proc.Process) bool { return p.PID == pid })
+		i := slices.IndexFunc(ps, func(p proc.Process) bool { return p.PID == pid })
+		if respawn {
+			ps[i].PID += 100 // the app starts another
+		} else {
+			ps = slices.Delete(ps, i, i+1)
+		}
 		return nil
 	}
 	if err := RestartCodexApp(context.Background(), bundle); err != nil {
@@ -590,6 +619,14 @@ func TestRestartCodexAppEndsOnlyItsServer(t *testing.T) {
 	}
 	if !slices.Equal(ended, []int{2}) {
 		t.Fatalf("ended %v, want only the app's own app-server 2", ended)
+	}
+
+	// gone, and the app started no other (its stdout held open): said,
+	// for the user to quit and open it, never taken as done
+	respawn, ended = false, nil
+	codexAppBackWait = 50 * time.Millisecond
+	if err := RestartCodexApp(context.Background(), bundle); err == nil || !slices.Equal(ended, []int{102}) {
+		t.Fatalf("no app-server came back: %v, ended %v", err, ended)
 	}
 
 	// none running: said
@@ -627,6 +664,25 @@ func TestRestartCodexAppWhenIdle(t *testing.T) {
 	if n, left, err := RestartCodexAppWhenIdle(context.Background(), time.Second); n != 2 || left || err != nil || !slices.Equal(s.ended, []int{7, 8}) {
 		t.Fatalf("ended %v (%d), left %v, %v", s.ended, n, left, err)
 	}
+
+	// none started in their place: the app is reopened, and said left
+	// when it can't be
+	oldBack, oldPoll := codexAppBackWait, codexAppPoll
+	t.Cleanup(func() { codexAppBackWait, codexAppPoll = oldBack, oldPoll })
+	codexAppBackWait, codexAppPoll = 20*time.Millisecond, time.Millisecond
+	s.noNext = true
+	reopened := 0
+	CodexAppReopen = func(context.Context) error { reopened++; return nil }
+	if n, left, err := RestartCodexAppWhenIdle(context.Background(), time.Second); n != 2 || left || err != nil || reopened != 1 {
+		t.Fatalf("none came back, reopened: %d %v %v, reopened %d times", n, left, err, reopened)
+	}
+	s.running = []int{9}
+	CodexAppReopen = func(context.Context) error { return errors.New("not here") }
+	if _, left, _ := RestartCodexAppWhenIdle(context.Background(), time.Second); !left {
+		t.Fatal("none came back and the app not reopened: not said")
+	}
+
+	s.running = []int{10}
 	s.endErr = proc.ErrDenied
 	if _, left, _ := RestartCodexAppWhenIdle(context.Background(), time.Second); !left {
 		t.Fatal("an app-server not ended isn't said")
@@ -703,5 +759,169 @@ func TestCodexAppSwitchRestartsTheAppsOwnServers(t *testing.T) {
 	}
 	if got := step(); got != nil {
 		t.Fatalf("the new app-servers read the new account as they started: ended %v", got)
+	}
+}
+
+// The Windows Codex app said "Codex app-server process is not available"
+// on every send after magpie switched its account, until Codex was quit
+// and opened again (蛋仔 on Discord, 10-30): magpie ended its app-server
+// and took the old one gone as the switch done, but the app starts
+// another only once the old one's stdout ends, and a process that
+// app-server started holds that open on Windows. Once the ones ended are
+// gone, a new one has to start within codexAppBackWait; when none does
+// and the app still runs, the app is reopened, and said stuck when it
+// can't be.
+func TestCodexAppReopenedWhenNoServerComesBack(t *testing.T) {
+	signIn(t)
+	s := stubCodexApp(t)
+	s.noNext = true
+	open, reopened := true, 0
+	var reopenErr error
+	CodexAppOpen = func(context.Context) (bool, bool) { return open, true }
+	CodexAppReopen = func(context.Context) error {
+		reopened++
+		if reopenErr != nil {
+			return reopenErr
+		}
+		s.running = []int{500} // the app opened again, with its own
+		return nil
+	}
+	start := time.Now()
+	idle := func() (int, time.Time) { return 0, start.Add(-time.Minute) }
+	step := func(at time.Duration) []int { return codexAppStep(context.Background(), start.Add(at), idle) }
+	end := func(at time.Duration) {
+		t.Helper()
+		s.on = !s.on // a route change, as a switch is
+		if got := step(at); len(got) != 1 {
+			t.Fatalf("ended %v, want the one app-server", got)
+		}
+	}
+
+	s.running = []int{60}
+	step(0)
+	end(0)
+	if step(codexAppBackWait / 2); reopened != 0 {
+		t.Fatal("reopened before a new app-server had its time")
+	}
+	if step(codexAppBackWait); reopened != 1 || CodexAppStuck() {
+		t.Fatalf("no app-server came back: reopened %d times, stuck %v", reopened, CodexAppStuck())
+	}
+	if step(2 * codexAppBackWait); reopened != 1 {
+		t.Fatalf("the reopened app's app-server: reopened %d times", reopened)
+	}
+
+	// the app started another in time: nothing more
+	s.noNext = false
+	end(3 * codexAppBackWait)
+	if step(5 * codexAppBackWait); reopened != 1 || CodexAppStuck() {
+		t.Fatalf("a new app-server started: reopened %d times, stuck %v", reopened, CodexAppStuck())
+	}
+
+	// one ended that takes its time to go: the wait counts from its end
+	s.noNext = true
+	slow := endCodexAppServer
+	endCodexAppServer = func(pid int) error { s.ended = append(s.ended, pid); return nil }
+	end(6 * codexAppBackWait)
+	endCodexAppServer = slow
+	if step(7*codexAppBackWait + time.Second); reopened != 1 {
+		t.Fatal("reopened while the one ended still ran")
+	}
+	s.running = nil
+	if step(8 * codexAppBackWait); reopened != 1 {
+		t.Fatal("reopened as the one ended went")
+	}
+	if step(8*codexAppBackWait + codexAppBackWait + 2*time.Second); reopened != 2 {
+		t.Fatalf("none came back after it went: reopened %d times", reopened)
+	}
+
+	// quit meanwhile: it starts one as it opens
+	s.running = []int{600}
+	end(10 * codexAppBackWait)
+	open = false
+	if step(12 * codexAppBackWait); reopened != 2 || CodexAppStuck() {
+		t.Fatalf("the app quit: reopened %d times, stuck %v", reopened, CodexAppStuck())
+	}
+
+	// not reopened (macOS, or the reopen failed): said stuck
+	open, reopenErr = true, errors.New("magpie doesn't reopen it here")
+	s.running = []int{700}
+	end(13 * codexAppBackWait)
+	if step(15 * codexAppBackWait); reopened != 3 || !CodexAppStuck() {
+		t.Fatalf("not reopened: reopened %d times, stuck %v", reopened, CodexAppStuck())
+	}
+}
+
+// When quota ran out in the middle of a task the Codex app sat on it and
+// had to be restarted (蛋仔 on Discord): the turn stays open in Codex's
+// sessions, and an open turn held the restart for up to codexTurnWindow.
+// After a switch off a used-up account, a turn that has written nothing
+// and sent nothing through magpie for codexTurnStuckAfter is stuck, and
+// the app-server is restarted past it. A switch for any other reason, or
+// a turn still writing or sending, holds it as before.
+func TestCodexAppServerRestartedPastATurnStuckOnTheSpentAccount(t *testing.T) {
+	signIn(t)
+	s := stubCodexApp(t)
+	now := time.Now()
+	quiet := func() (int, time.Time) { return 0, now.Add(-codexTurnStuckAfter - time.Second) }
+	step := func(busy func() (int, time.Time)) []int { return codexAppStep(context.Background(), now, busy) }
+
+	s.running, s.turnOpen = []int{60}, true
+	step(quiet)
+	codexAppAccountSwitched() // switched back to an account with room
+	if got := step(quiet); got != nil {
+		t.Fatalf("a turn open after a switch not for spend: ended %v", got)
+	}
+
+	codexAppSpentSwitch()
+	if got := step(func() (int, time.Time) { return 0, now.Add(-time.Minute) }); got != nil {
+		t.Fatalf("Codex's last request through magpie a minute ago: ended %v", got)
+	}
+	s.written = true
+	if got := step(quiet); got != nil {
+		t.Fatalf("the turn still writing to its session: ended %v", got)
+	}
+	s.written = false
+	if got := step(quiet); !slices.Equal(got, []int{60}) {
+		t.Fatalf("a turn stuck on the used-up account: ended %v, want [60]", got)
+	}
+	// the app's next app-server is on the new account: nothing more ended,
+	// and the spend is forgotten once it is back
+	if got := step(quiet); got != nil {
+		t.Fatalf("after the new app-server: ended %v", got)
+	}
+	codexApp.Lock()
+	spent := codexApp.spent
+	codexApp.Unlock()
+	if spent {
+		t.Fatal("the spend is still held after the app-server came back")
+	}
+}
+
+// codexSessionsQuietFor reads the sessions' write times: a file written
+// within d is not quiet, an older one or none is, and a sessions folder
+// that can't be read is not.
+func TestCodexSessionsQuietFor(t *testing.T) {
+	home := t.TempDir()
+	now := time.Now()
+	if !codexSessionsQuietFor(home, now, time.Minute) {
+		t.Fatal("no sessions folder: not quiet")
+	}
+	dir := filepath.Join(home, "sessions", "2026", "10", "30")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f := filepath.Join(dir, "rollout-x.jsonl")
+	if err := os.WriteFile(f, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if codexSessionsQuietFor(home, now, time.Minute) {
+		t.Fatal("a session written just now counts quiet")
+	}
+	old := now.Add(-5 * time.Minute)
+	if err := os.Chtimes(f, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if !codexSessionsQuietFor(home, now, time.Minute) {
+		t.Fatal("a session last written 5 minutes ago: not quiet")
 	}
 }
