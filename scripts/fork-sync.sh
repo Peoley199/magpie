@@ -166,20 +166,26 @@ build() {
     echo "not installed (--install 'D:\\magpie' replaces that folder's desktop app)"
     return 0
   fi
-  local target="$INSTALL_DIR/magpie-windows-amd64.exe" old
+  local target="$INSTALL_DIR/magpie-windows-amd64.exe" old running=0
   [ -f "dist/magpie-windows-amd64.exe" ] || die "--install needs a Windows build; dist has none"
   [ -f "$target" ] || die "nothing to replace at $target"
-  # a running app holds its .exe: replacing it then fails, or leaves two
-  # versions fighting over the gateway
-  if tasklist 2>/dev/null | grep -qi 'magpie'; then
-    die "magpie is running — quit it from the tray, then run again"
-  fi
+  # A running app holds its .exe open, so it can be neither overwritten nor
+  # deleted — but Windows does allow renaming it. Rename, then copy the new
+  # one in: the running process keeps its file, and the next start from the
+  # same path gets the new build. No need to stop the gateway.
+  tasklist 2>/dev/null | grep -qi 'magpie-windows-amd64' && running=1
   old=$("$target" --version 2>/dev/null | awk '{print $2}')
   old=${old#v}   # .bak-v0.1.2119, as the folder's older backups are named
-  cp -p "$target" "$target.bak-v${old:-unknown}" || die "backup of $target failed"
+  if [ "$running" -eq 1 ]; then
+    mv "$target" "$target.bak-v${old:-unknown}" || die "could not rename the running $target"
+    echo "magpie is running: renamed it aside instead of overwriting"
+  else
+    cp -p "$target" "$target.bak-v${old:-unknown}" || die "backup of $target failed"
+  fi
   cp dist/magpie-windows-amd64.exe "$target" || die "copy to $target failed"
   echo "installed $target ($("$target" --version))"
   echo "previous kept as $(basename "$target").bak-v${old:-unknown}"
+  [ "$running" -eq 0 ] || echo "the running app still serves the old build; restart it from the tray to pick this one up"
 }
 
 # ---------------------------------------------------------------- main
