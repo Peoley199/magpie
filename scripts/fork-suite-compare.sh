@@ -11,11 +11,16 @@
 #     docs/fork-sync.md §三 for the catalogue before you call it a regression)
 set -uo pipefail
 
-MERGED_LOG=${1:?usage: fork-suite-compare.sh <merged-suite-log>}
+MERGED_LOG=${1:?usage: fork-suite-compare.sh <merged-suite-log> [baseline-ref]}
 cd "$(dirname "$0")/.."
 PROXY=127.0.0.1:7897
 GOPW=(HTTPS_PROXY="http://$PROXY" HTTP_PROXY="http://$PROXY")
-BASE=$(git rev-parse HEAD^1)   # our side of the merge = the pre-merge head
+# The baseline is our side of the last merge, not HEAD^1: commits often
+# follow the merge (docs, script fixes), and HEAD^1 would then be the merge
+# itself — the same code as the head, which makes every red "pre-existing".
+BASE=${2:-$(git log --merges -1 --format=%P | awk '{print $1}')}
+[ -n "$BASE" ] || BASE=$(git rev-parse HEAD^1)
+echo "baseline: $BASE ($(git log -1 --format=%s "$BASE" | cut -c1-70))"
 WT=$(mktemp -d)/baseline-$BASE
 trap 'git worktree remove --force "$WT" 2>/dev/null' EXIT
 
