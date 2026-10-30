@@ -161,11 +161,17 @@ rm -f rsrc_windows_*.syso internal/update/launcher-*.com
 **安装**（脚本 `--install` 自动做）：
 
 ```
-tasklist | grep -i magpie     # 先确认没在运行，运行中 Windows 会锁住 exe
+# 应用没在跑时：
 cp -p magpie-windows-amd64.exe magpie-windows-amd64.exe.bak-v<旧版本>   # 旧版留档
+cp dist/magpie-windows-amd64.exe magpie-windows-amd64.exe
+# 应用正在跑时（Windows 不许覆盖或删除运行中的 exe，但**允许改名**）：
+mv magpie-windows-amd64.exe magpie-windows-amd64.exe.bak-v<旧版本>
 cp dist/magpie-windows-amd64.exe magpie-windows-amd64.exe
 ./magpie-windows-amd64.exe --version
 ```
+
+运行中的进程继续用它那份（已改名的）文件，网关不中断；下次从菜单栏退出再启动，同一路径拿到的
+就是新版本。10-31 用这招在 `v0.1.2232` 运行中直接装上了 `v0.1.2244`，网关全程 200。
 
 `D:\magpie` 现有的 `.bak` / `.bak-v0.1.1373` 就是同一套留档约定。GUI 子系统的 exe 从控制台
 调用 `--version` 仍有输出，可以直接冒烟。
