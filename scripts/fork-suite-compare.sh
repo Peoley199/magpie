@@ -49,8 +49,14 @@ GONE=$(comm -23 <(echo "$BASE_FAILS") <(echo "$MERGED_FAILS"))
 if [ -z "$NEW" ]; then
   echo "NO new failures — every red on the merge head is pre-existing."
 else
-  echo "failures NEW on the merge head (trace each before pushing):"
+  echo "failures NEW on the merge head (trace each before calling it a regression):"
   echo "$NEW"
+  echo
+  echo "the decisive check for each is the same test on pure upstream, where no"
+  echo "fork commit exists; red there too means the fork did not cause it:"
+  echo "  git worktree add /tmp/up upstream/main"
+  echo "  (cd /tmp/up && go test ./internal/<pkg> -run '^<TestName>$' -count=1)"
+  echo "  git worktree remove --force /tmp/up && git worktree prune"
 fi
 [ -n "$GONE" ] && { echo; echo "reds that the merge fixed (spot-check these, they may be order-dependent):"; echo "$GONE"; }
 

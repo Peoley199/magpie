@@ -54,6 +54,14 @@ bash scripts/fork-suite-compare.sh /tmp/fork-suite.log         # 红测试：回
 2. **全量套件红时**：跑 `scripts/fork-suite-compare.sh`，凡"基线也红（签名一致）"或"上游新测试
    在 Windows 的已知缺陷类"（symlink 权限 / loopback 句柄 / GOOS 守卫 / 跨测试 LOCALAPPDATA 污染 /
    TempDir 文件锁）→ 放行；凡签名变化或无法归类 → 停下查因。
+3. **判"是不是我们的问题"的终极一招**：把同一个测试放到**纯上游**树上跑。上游没有 fork 的任何提交，
+   在那里还红就与 fork 无关——比跑整包基线快得多，且结论更硬：
+
+   ```
+   git worktree add /tmp/up upstream/main
+   (cd /tmp/up && HTTPS_PROXY=http://127.0.0.1:7897 go test ./internal/<pkg> -run '^TestX$' -count=1)
+   git worktree remove --force /tmp/up && git worktree prune
+   ```
 
 ### 10-30 实测记录（基线 51 个预存红 + 15 个上游自带红，0 回归）
 
@@ -67,6 +75,22 @@ bash scripts/fork-suite-compare.sh /tmp/fork-suite.log         # 红测试：回
   Windows 有提前返回（`codex_daemon.go:378`），测试缺 GOOS 守卫；
 - 1 个 `TestFnmWinBins`：fixture 依赖 symlink 成功；
 - 1 个 `TestLibraryMCPHub`：断言全过，仅 TempDir 清理遇 Windows 文件锁。
+
+### 10-31 实测记录（ffa07395→v0.1.2232，149 提交；12 包 57 红，0 回归）
+
+基线对照（`fork-suite-compare.sh`，基线 = 上次合并的 fork 侧 9fb675638）：53 个签名与基线一致，
+1 个签名变化（`TestLoadConcurrentWithSavesAndEdits`，同为 Windows rename 文件锁，只是卡在 add 而非
+remove），3 个"仅合并头红"。这三个都**在纯上游 `f7f2d75f2` 上同样复现**，与 fork 无关：
+
+| 测试 | 现象 | 根因 |
+| --- | --- | --- |
+| `TestMaskedRecordKeepsSentAndBack` | 单独跑过，与其它 masking 测试同跑就红（`Sent:` 空） | 测试间共享 maskrec 状态，隔离缺陷 |
+| `TestRestartSwitchedCodexAppReal` | `index out of range [0]` panic | 子进程 env 只给 `MAGPIE_CODEX_SWITCH_HELPER/TMPDIR/HOME`，Windows 上缺 `TEMP/TMP`，`os.MkdirTemp` 退到 `C:\WINDOWS` 失败（实测报 `testenv: mkdir C:\WINDOWS\magpie-test-home-…: Access is denied`），helper 无输出即退出，`f.started[0]` 越界 |
+| `TestSlowTransferIsNotCutShort` | `the server sent and took nothing for 1s (PUT)` | 靠 `SetReadBuffer/SetWriteBuffer` 造慢线路，Windows 上语义不同，线路没有真的变慢 |
+
+顺带记一笔：这一轮我自己的 `fork-suite-compare.sh` 也有个坑——基线一度取 `HEAD^1`，而合并后
+又有文档提交，`HEAD^1` 就成了合并提交本身，基线代码与合并头相同，于是 57 个红里只"认出" 15 个。
+现在基线取"最后一次合并的第一个父提交"（或第二个参数指定）。
 
 ## 四、远端仓库的处理
 
