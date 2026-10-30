@@ -64,9 +64,12 @@ sync() {
 
   step "3. fork fingerprints upstream must not have adopted"
   local adopted=0 fp pat file
-  # fingerprint | the upstream file it would live in
+  # fingerprint | the upstream file it would live in.
+  # Each one must tell our code from upstream's: `dir := path\.Clean` does
+  # not match filepath.Clean, while `path\.Clean(...)` alone matched inside
+  # it and reported upstream as having adopted a fix it does not have.
   for fp in \
-    'path\.Clean\("/" \+ parts\[2\]\)|internal/gateway/claude_room.go' \
+    'dir := path\.Clean|internal/gateway/claude_room.go' \
     'func zcodeStartPlan|internal/gateway/anthropic_shapes.go' \
     'zcodeWorkDir|internal/gateway/workdir.go'; do
     pat=${fp%|*}; file=${fp#*|}
@@ -83,7 +86,7 @@ sync() {
     die "the merge has conflicts — resolve by hand (docs/fork-sync.md §二)"
   fi
   local keep=0
-  for pat in 'path\.Clean\("/" \+ parts\[2\]\)' 'func zcodeStartPlan' 'zcodeWorkDir'; do
+  for pat in 'dir := path\.Clean' 'func zcodeStartPlan' 'zcodeWorkDir'; do
     grep -rqE "$pat" internal/gateway/ || { keep=1; echo "MISSING after merge: $pat"; }
   done
   git merge --abort >/dev/null 2>&1
