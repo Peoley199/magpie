@@ -84,7 +84,24 @@ dist/magpie.exe --version   # 冒烟
 
 产物放 `dist/`（上游 .gitignore 已忽略，不污染工作树）。版本串加 `-fork` 后缀可区分 fork 构建。
 
-## 六、验证命令速查
+## 六、脚本实测记录（2026-10-30，全部通过）
+
+`fork-sync.sh` 三条路径实跑：
+- **调查模式**（无参数）：拉取 → 双向计数 → fork 提交清单 → 文件重叠 → 指纹核查 → 干跑合并并验证
+  指纹存活，然后停止，零改动；
+- **全流程**（`--yes`）：自动合并 cdf8151a→ffa07395（4 提交，含 Responses WebSocket #4058），
+  `go build ./...`、`gofmt`、`go vet`、fork 测试全绿，构建出 `dist/magpie.exe` 与
+  `dist/magpie-cli.exe`（`v0.1.2119-11-g6ae51122-fork`）；
+- **幂等**（`--yes --push`，上游已全部合入）：正确输出 `nothing to sync` 并退出，不误合并；
+- **脏树保护**：工作树有未提交改动时在任何改动前 `STOP`。
+
+`fork-suite-compare.sh` 两种输入实跑：预存红 → 判定 "NO new failures" + 签名一致；注入一个假的新
+失败 → 准确列为 "failures NEW on the merge head"。
+
+注意：脚本用 `set -uo pipefail`（**没有** `set -e`），因为脏树检查那行是
+`grep -q . && die` 形式——去掉 `set -e` 才不会在正常路径上误中止。
+
+## 七、验证命令速查
 
 ```
 # fork 修复核心测试（最快闸门）
