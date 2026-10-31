@@ -1,8 +1,8 @@
 # Fork 同步与构建手册（Peoley199/magpie）
 
 本 fork 的上游是 `yetone/magpie`（remote 名 `upstream`），fork 自己的改动长期保留在上游之外。
-本文是 2026-10-30 几轮同步（7499ebb5→cd10dfbe 700 提交、→cdf8151a 40、→ffa07395 4、
-→f7f2d75f 149）沉淀的操作手册，配套两个脚本：
+本文是 2026-10-30／10-31／11-01 几轮同步（7499ebb5→cd10dfbe 700 提交、→cdf8151a 40、
+→ffa07395 4、→f7f2d75f 149、→380032cda 11、→854fc8161 237）沉淀的操作手册，配套两个脚本：
 
 - `scripts/fork-sync.sh` — 调查→方案→合并→验证→（推送）→构建，一条命令跑完；
 - `scripts/fork-suite-compare.sh` — 合并头与合并前基线的红测试对照（判断"回归还是预存"）。
@@ -104,6 +104,26 @@ remove），3 个"仅合并头红"。这三个都**在纯上游 `f7f2d75f2` 上�
 
 其余 56 个签名与基线一致、1 个同类签名变化（Windows rename 文件锁）。结论仍是 0 回归。
 
+### 11-01（v0.1.2244→v0.1.2422，**237 提交**；13 包 64 红，0 回归）
+
+`--yes --push --install` 一次跑完（运行中的 app 用改名法装上）。基线对照：56 个签名一致、
+1 个同类签名变化、7 个"仅合并头红"。这 7 个全部排除，且**每条都做了纯上游复现**：
+
+| 测试 | 根因（实测） |
+| --- | --- |
+| `TestGitUpdateInstallsTheBranchsCommitNow`／`TestGitUpdateKeepsACommitPin` | `bun add git+file:///C:/…` 让 Bun 自己崩（"Bun has crashed… a bug in Bun"）；纯上游同样红 |
+| `TestHubRootsOfACodexThread` | 转 metadata 里的 `/work/repo` 在 Windows 上不是绝对路径，roots 变成空；纯上游同样红 |
+| `TestPackagedByDpkg` | fixture 文件名 `magpie:amd64.list` 含冒号，Windows 上这是 NTFS 备用数据流，文件建不出来，`dpkgOwner` 找不到 → nil；纯上游同样红 |
+| `TestSettingsSaveKeepsWhatItDoesNotSend` | 上游新增设置项 `SearchAll` 没加进这个守卫测试的 fixture，守卫当场报"not sent by the Settings page"；纯上游同样红（与平台无关，是真上游红灯） |
+| `TestMagpieModelsKeptWhileCatalogStays` | 分配字节上限，`internal/agent` 与上游**逐字节相同**（`git diff` 为空），纯上游同样红 |
+| `TestCodexModelEffortLetsUnrelatedCallsGo` | 同类字节上限，靠 sync.Pool，`internal/usage` 与上游相同：同一份代码上游 8 次里 3 次过、本机合并头 8 次全红，属负载相关抖动（LESSONS #3472） |
+
+**一条很有用的判据**：fork 只改 `internal/gateway`（加 docs/scripts）。凡是别的包里的红，
+`git diff upstream/main HEAD -- <pkg>` 为空就说明代码与上游完全一样，**根本不可能是 fork 引起的**，
+连跑纯上游都省了 —— 上面 `internal/agent`、`internal/usage` 两条就是这样定性的。
+
+另外 `TestMaskedRecordKeepsSentAndBack`（上一轮红）这一轮转绿，属测试间状态相关，不是新问题。
+
 ## 四、远端仓库的处理
 
 - **推送**：`git push origin main`，永远是 fast-forward（合并方式保证不改写历史）。禁止 rebase
@@ -111,7 +131,7 @@ remove），3 个"仅合并头红"。这三个都**在纯上游 `f7f2d75f2` 上�
 - **下次同步的起点**：合并后 `git merge-base main upstream/main` 就是上游最新提交——后续
   `git fetch upstream && git merge upstream/main` 天然只算增量，无需任何清理。
 - **tag**：上游 tag 用 `git fetch upstream --tags` 补拉；版本号以 `git describe --tags upstream/main`
-  为准（10-30 时是 v0.1.2115 = cdf8151a）。
+  为准（11-01 时是 v0.1.2422 = 854fc8161）。
 - 合并提交信息按惯例：一行主题（提交数 + fork 修复保留）+ 正文（上游要点、fork 修复为何保留、
   冲突情况、跑了什么）。
 
