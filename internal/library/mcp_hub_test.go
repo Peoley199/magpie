@@ -604,3 +604,52 @@ func TestHubDirectServer(t *testing.T) {
 		t.Error("an unknown hub policy was saved")
 	}
 }
+
+// magpie's own image server is in the hub too: listed as a tool that
+// writes into the agent's project (Roots), and each call made with the
+// agent's roots and name in _meta, an empty list when it has none here,
+// so it saves into that agent's project. The agent's file has the hub's
+// entry and not the server's own.
+func TestHubGivesMagpieImage(t *testing.T) {
+	h := hubSandbox(t)
+	claude := filepath.Join(h, ".claude.json")
+	write(t, claude, `{"mcpServers": {}}`)
+	img := fakeStdio(t, "ok", nil)
+	img.Name, img.Args, img.Agents = selfServerName, []string{"mcp", "image"}, []string{"claude"}
+	ok(t)(SaveServer("", *img))
+	ok(t)(SetMCPHub(true))
+	hub := theHub{}
+	ctx := context.Background()
+
+	tools := hub.Tools(ctx, "claude")
+	if got := hubNames(tools); !slices.Equal(got, []string{"magpie-image/a", "magpie-image/b", "magpie-image/c"}) {
+		t.Fatalf("claude's tools %v, want magpie-image's", got)
+	}
+	for _, x := range tools {
+		if !x.Roots {
+			t.Errorf("%s/%s isn't said to write into the project", x.Server, x.Tool)
+		}
+	}
+	e, err := targetByID("claude").MCP.entries()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e["magpie"] == nil || e[selfServerName] != nil {
+		t.Fatalf("claude's file:\n%s", read(t, claude))
+	}
+
+	res, err := hub.Call(gateway.WithHubCaller(ctx, gateway.HubCaller{Roots: []string{"file:///work/proj"}, Client: "claude-code/2.1.314"}), "claude", selfServerName, "a", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := hubText(t, res); !strings.Contains(got, `meta={"magpie/client":"claude-code/2.1.314","magpie/roots":["file:///work/proj"]}`) {
+		t.Errorf("called as %q", got)
+	}
+	res, err = hub.Call(ctx, "claude", selfServerName, "a", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := hubText(t, res); !strings.Contains(got, `meta={"magpie/roots":[]}`) {
+		t.Errorf("no roots: called as %q", got)
+	}
+}

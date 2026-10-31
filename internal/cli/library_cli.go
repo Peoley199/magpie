@@ -24,9 +24,9 @@ const libraryUsage = `magpie library                     what the library gives 
   magpie library mcp local <name> on|off   keep it to this computer: a sync or a backup never carries it, and one
                                      coming in neither takes it away nor puts another computer's in its place
   magpie library mcp rm <name>
-  magpie library mcp hub on|off      give each agent one MCP server, magpie, in place of the library's (magpie runs them, once for every agent)
-  magpie library mcp hub <name> shared|direct   with the hub on, share the server through it (the default) or keep it each
-                                     agent's own entry, as with the hub off: for one that reads its project from the folder it starts in
+  magpie library mcp router on|off   give each agent one MCP server, magpie, in place of the library's (magpie runs them, once for every agent)
+  magpie library mcp router <name> shared|direct   with the router on, share the server through it (the default) or keep it each
+                                     agent's own entry, as with the router off: for one that reads its project from the folder it starts in
   magpie library skill agents <name> <a,b…|none>
   magpie library skill off-here <name>   turn it off on this computer only: a sync neither carries that nor turns it back on
   magpie library skill on-here <name>    …and on again here
@@ -141,9 +141,9 @@ func libraryCmd(args []string) error {
 			}
 		case len(rest) == 2 && rest[0] == "rm":
 			res, err = library.RemoveServer(rest[1])
-		case len(rest) == 2 && rest[0] == "hub" && (rest[1] == "on" || rest[1] == "off"):
+		case len(rest) == 2 && (rest[0] == "router" || rest[0] == "hub") && (rest[1] == "on" || rest[1] == "off"):
 			res, err = library.SetMCPHub(rest[1] == "on")
-		case len(rest) == 3 && rest[0] == "hub" && (rest[2] == "shared" || rest[2] == "direct") && !strings.HasPrefix(rest[1], "-"):
+		case len(rest) == 3 && (rest[0] == "router" || rest[0] == "hub") && (rest[2] == "shared" || rest[2] == "direct") && !strings.HasPrefix(rest[1], "-"):
 			// a server out of the hub, each agent's own entry (#4382)
 			res, err = library.ServerHub(rest[1], rest[2] == "direct")
 		default:

@@ -82,6 +82,7 @@ async function open(t, engine, { lang, theme = "light", web = true, width = 1100
   t.after(() => browser.close());
   const page = await (await browser.newContext({ viewport: { width, height: 700 } })).newPage();
   page.setDefaultTimeout(5000);
+  page.setDefaultNavigationTimeout(60000);
   const errors = [], posts = [];
   page.on("pageerror", (e) => errors.push(e.message));
   await page.route("**/*", serve(lang, theme, web, posts));

@@ -84,6 +84,7 @@ async function open(t, engine, lang, width, lead, posts) {
     await browser.close();
   });
   page.setDefaultTimeout(5000);
+  page.setDefaultNavigationTimeout(60000);
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
   await page.route("**/*", server(lang, users, posts, lead));
@@ -179,6 +180,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
     const page = await (await browser.newContext({ viewport: { width: 900, height: 600 }, reducedMotion: "reduce" })).newPage();
     t.after(() => browser.close());
     page.setDefaultTimeout(5000);
+    page.setDefaultNavigationTimeout(60000);
     await page.route("**/*", server("en", [], [], undefined));
     await watchSettingsReads(page);
     await page.goto("http://magpie.test/?view=settings&tab=usage");

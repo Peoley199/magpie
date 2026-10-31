@@ -7,15 +7,20 @@ import (
 )
 
 // SkipsRedaction says requests to p go unmasked: the user set Unredacted
-// ("Send requests unmasked") and p has an address. It is the user's word
-// whatever the address (AcMilan on Discord: the user decides for each
-// provider); the editor cautions when an address isn't on this machine or
-// the local network (LocalHost), and nothing here looks one up. A
-// signed-in account, a plugin's provider and another magpie are always
-// masked: each reaches a vendor.
+// ("Send requests unmasked") and p has somewhere they go. It is the user's
+// word for each provider whatever the address (AcMilan on Discord), a
+// subscription's and a plugin's too (isee1_1 on Discord: a plugin's
+// provider never had the switch): the editor cautions while it is on for
+// one not on this computer or the local network, which a signed-in
+// account's or a plugin's vendor never is, and nothing here looks one up.
+// Another magpie is always masked: it masks on its own side, and what it
+// is sent goes on to its vendors.
 func (p Provider) SkipsRedaction() bool {
-	if !p.Unredacted || p.Account != nil || p.IsRemoteMagpie() {
+	if !p.Unredacted || p.IsRemoteMagpie() {
 		return false
+	}
+	if p.Account != nil {
+		return true // the agent's sign-in or a plugin's: its vendor is where it goes
 	}
 	for _, b := range []string{p.Chat, p.Responses, p.Anthropic, p.Gemini, p.Decide} {
 		if b != "" {

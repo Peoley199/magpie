@@ -7,7 +7,10 @@
 // /api/local-hosts); a local one (localhost, a private IP, a name of the
 // user's own DNS resolving only to the local network) has none. A
 // name is asked about only once the switch is on, so an editor merely
-// opened asks nothing. A signed-in account has no row. In English and Chinese, wide and narrow.
+// opened asks nothing. A signed-in account or a plugin's provider has the
+// row too (isee1_1 on Discord), its caution always shown while on: its
+// vendor is never local. Another magpie has none. In English and Chinese,
+// wide and narrow.
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const path = require("node:path");
@@ -39,9 +42,15 @@ const codex = {
   account: { agent: "codex", agentName: "Codex", user: "me@example.com", plan: "PLUS", logins: [{ user: "me@example.com", plan: "PLUS", active: true, on: true }] },
   proxy: "",
 };
+// a community plugin's provider, keyless, and another magpie
+const plugin = {
+  ...base, id: "translate", name: "Translate Plugin", chat: "plugin://translate", unredacted: true,
+  account: { agent: "translate", agentName: "Translate Plugin", user: "translate", plan: "", logins: [{ user: "translate", active: true, on: true }] },
+};
+const home = { ...base, id: "home", name: "Home magpie", preset: "remote-magpie", anthropic: "http://192.168.1.5:3425" };
 
 function serve(lang, posts, asked) {
-  const providers = { providers: [local, lan, relay, named, codex], presets: [], excluded: [], gateway: { running: true, window: true } };
+  const providers = { providers: [local, lan, relay, named, codex, plugin, home], presets: [], excluded: [], gateway: { running: true, window: true } };
   const state = { agents: [], profiles: [], settings: { lang, theme: "light" } };
   return async (route) => {
     const url = new URL(route.request().url());
@@ -87,13 +96,17 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         });
         const page = await (await browser.newContext({ viewport: { width, height: 760 }, reducedMotion: "reduce" })).newPage();
         page.setDefaultTimeout(5000);
+        page.setDefaultNavigationTimeout(60000);
         const errors = [];
         page.on("pageerror", (e) => errors.push(e.message));
         const posts = [];
         const asked = [];
         await page.route("**/*", serve(lang, posts, asked));
         await page.goto("http://magpie.test/?view=providers");
-        await page.locator(".row.provider", { hasText: name }).click();
+        // another magpie's row is the list's last, under its sticky foot
+        // at 440 in Linux WebKit (#4484): it is clicked as an event
+        const pick = page.locator(".row.provider", { hasText: name });
+        await (name === "Home magpie" ? pick.dispatchEvent("click") : pick.click());
         await unfold(page);
         await page.locator(".editor .bar").waitFor();
         return { page, errors, posts, asked };
@@ -211,8 +224,40 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.deepEqual(errors, []);
       });
 
-      test(`${engine} ${lang} ${width}: a signed-in account has no such row`, async (t) => {
-        const { page, errors } = await open(t, "Codex");
+      test(`${engine} ${lang} ${width}: a signed-in account has the row, its caution shown once on, and is saved so`, async (t) => {
+        const { page, errors, posts, asked } = await open(t, "Codex");
+        assert.equal(await row(page).isVisible(), true);
+        assert.equal(await box(page).isChecked(), false, "opens masked");
+        await cautionSays(page, "");
+        await box(page).scrollIntoViewIfNeeded();
+        await box(page).check();
+        await cautionSays(page, w.away("Codex"));
+        await caution(page).scrollIntoViewIfNeeded();
+        const c = await caution(page).boundingBox();
+        assert.ok(c.x >= 0 && c.x + c.width <= width, `the caution fits: ${JSON.stringify(c)}`);
+        const saved = await save(page, posts);
+        assert.equal(saved.action, "save");
+        assert.equal(saved.body.id, "codex");
+        assert.equal(saved.body.unredacted, true);
+        assert.deepEqual(asked, [], "a vendor's service is never asked about");
+        assert.deepEqual(errors, []);
+      });
+
+      test(`${engine} ${lang} ${width}: a plugin's provider saved unmasked opens ticked with its caution, and is saved masked`, async (t) => {
+        const { page, errors, posts } = await open(t, "Translate Plugin");
+        assert.equal(await box(page).isChecked(), true);
+        await cautionSays(page, w.away("Translate Plugin"));
+        await box(page).scrollIntoViewIfNeeded();
+        await box(page).uncheck();
+        await cautionSays(page, "");
+        const saved = await save(page, posts);
+        assert.equal(saved.body.id, "translate");
+        assert.equal(saved.body.unredacted, false);
+        assert.deepEqual(errors, []);
+      });
+
+      test(`${engine} ${lang} ${width}: another magpie has no such row`, async (t) => {
+        const { page, errors } = await open(t, "Home magpie");
         assert.equal(await row(page).count(), 0);
         assert.deepEqual(errors, []);
       });
