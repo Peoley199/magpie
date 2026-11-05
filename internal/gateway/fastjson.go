@@ -95,6 +95,16 @@ var heldBodies struct {
 	list atomic.Pointer[[][]byte]
 	// facts: a held body's bodyFacts, by the body's first byte (factsOf)
 	facts map[*byte]heldFacts
+	// long: what longBody found of a held body, by its first byte
+	long map[*byte]heldLong
+}
+
+// heldLong is what longBody found of a held body: valid or not, and its
+// top level's members.
+type heldLong struct {
+	n       int
+	valid   bool
+	members []memberSpan
 }
 
 // heldBodiesMost bounds heldBodies: a body past it is decoded with copies, as
@@ -144,6 +154,7 @@ func holdBody(ctx context.Context, body []byte) {
 			return
 		}
 		delete(heldBodies.facts, unsafe.SliceData(body))
+		delete(heldBodies.long, unsafe.SliceData(body))
 		next := slices.Delete(slices.Clone(cur), i, i+1)
 		heldBodies.list.Store(&next)
 	})
@@ -833,7 +844,10 @@ var topSplit atomic.Pointer[func(data []byte)]
 // at its top level again by each of the dozen decodes it went through,
 // each a walk over every byte of the conversation.
 func longBody(data []byte) (valid bool, members []memberSpan) {
-	s := validSum{len(data), maphash.Bytes(validSeed, data)}
+	if e, held := heldLongOf(data); held {
+		return e.valid, e.members
+	}
+	s := validSum{len(data), validHash(data)}
 	validMemo.Lock()
 	i := slices.IndexFunc(validMemo.sums[:], func(e validEntry) bool { return e.validSum == s })
 	if i >= 0 && validMemo.sums[i].members != nil {
@@ -842,7 +856,7 @@ func longBody(data []byte) (valid bool, members []memberSpan) {
 		return true, members
 	}
 	validMemo.Unlock()
-	if i < 0 {
+	if i < 0 && !heldMember(data) {
 		if f := validScanned.Load(); f != nil {
 			(*f)(data)
 		}
@@ -874,6 +888,102 @@ func longBody(data []byte) (valid bool, members []memberSpan) {
 
 var validSeed = maphash.MakeSeed()
 
+// validHash is data's sum in validMemo.
+func validHash(data []byte) uint64 {
+	if f := validHashed.Load(); f != nil {
+		(*f)(data)
+	}
+	return maphash.Bytes(validSeed, data)
+}
+
+// validHashed, when set (tests), is told of each body validHash sums.
+var validHashed atomic.Pointer[func(data []byte)]
+
+// heldLongOf is what longBody finds of data when data is a body being
+// served (holdBody), whole, and whether it is one. A held body is not
+// written while held, so it is known again by where it is, not by a hash
+// of all its bytes: each of the dozen decodes a request went through
+// summed its whole body, a twentieth of the gateway's CPU on long Codex
+// requests (#4371). What is found is kept until the body is released.
+func heldLongOf(data []byte) (heldLong, bool) {
+	key := unsafe.SliceData(data)
+	heldBodies.Lock()
+	e, ok := heldBodies.long[key]
+	heldBodies.Unlock()
+	if ok && e.n == len(data) {
+		return e, true
+	}
+	l := heldBodies.list.Load()
+	if l == nil || !slices.ContainsFunc(*l, func(b []byte) bool { return unsafe.SliceData(b) == key && len(b) == len(data) }) {
+		return heldLong{}, false
+	}
+	e = heldLong{n: len(data)}
+	if f := validScanned.Load(); f != nil {
+		(*f)(data)
+	}
+	if e.valid = jsonCheck(data); e.valid {
+		if raw := trimJSON(data); raw[0] == '{' {
+			if f := topSplit.Load(); f != nil {
+				(*f)(data)
+			}
+			e.members = []memberSpan{}
+			eachMemberAt(raw, func(k0, k1, v0, v1 int) bool {
+				e.members = append(e.members, memberSpan{k0, k1, v0, v1})
+				return true
+			})
+		}
+	}
+	heldBodies.Lock()
+	defer heldBodies.Unlock()
+	// only while body is held: one released may be freed, and its memory
+	// given to another body that would read as this one (factsOf)
+	if l := heldBodies.list.Load(); l != nil && slices.ContainsFunc(*l, func(b []byte) bool { return unsafe.SliceData(b) == key && len(b) == len(data) }) {
+		if heldBodies.long == nil {
+			heldBodies.long = map[*byte]heldLong{}
+		}
+		heldBodies.long[key] = e
+	}
+	return e, true
+}
+
+// heldMember is whether data is the whole value of a top-level member of a
+// body being served that heldLongOf found valid: a part of a valid value
+// split at its members is valid itself, so it is not checked byte by byte
+// again. A request's conversation (a Responses request's input, a chat's
+// messages) is decoded alone by each of its readers, and the first decode
+// of each, as a value of its own, checked all of it again: two readers at
+// once (the prompt's, the folder's) each did, before the hash memo knew
+// it. A 516 MB Codex turn of generated images was checked three times over
+// before routing, past the 30s magpie gives its own work there under
+// -race on a loaded CI machine (#5281).
+func heldMember(data []byte) bool {
+	if len(data) == 0 {
+		return false
+	}
+	p := uintptr(unsafe.Pointer(unsafe.SliceData(data)))
+	l := heldBodies.list.Load()
+	if l == nil {
+		return false
+	}
+	heldBodies.Lock()
+	defer heldBodies.Unlock()
+	for _, b := range *l {
+		e, ok := heldBodies.long[unsafe.SliceData(b)]
+		if !ok || !e.valid || e.n != len(b) || len(e.members) == 0 {
+			continue
+		}
+		raw := trimJSON(b)
+		start := uintptr(unsafe.Pointer(unsafe.SliceData(raw)))
+		if p < start || p+uintptr(len(data)) > start+uintptr(len(raw)) {
+			continue
+		}
+		off := int(p - start)
+		i, found := slices.BinarySearchFunc(e.members, off, func(m memberSpan, off int) int { return m.v0 - off })
+		return found && e.members[i].v1-e.members[i].v0 == len(data)
+	}
+	return false
+}
+
 // validScanned, when set (tests), is told of each body of validMemoMin or
 // more that jsonValid checks byte by byte.
 var validScanned atomic.Pointer[func(data []byte)]
@@ -885,7 +995,13 @@ func jsonValid(data []byte) bool {
 	if len(data) < validMemoMin {
 		return jsonCheck(data)
 	}
-	s := validSum{len(data), maphash.Bytes(validSeed, data)}
+	if e, held := heldLongOf(data); held {
+		return e.valid
+	}
+	if heldMember(data) {
+		return true
+	}
+	s := validSum{len(data), validHash(data)}
 	validMemo.Lock()
 	known := slices.ContainsFunc(validMemo.sums[:], func(e validEntry) bool { return e.validSum == s })
 	validMemo.Unlock()

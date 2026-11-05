@@ -59,13 +59,19 @@ func (c *tuiCalls) write(lines ...string) {
 }
 
 // call makes Claude Code's call of a client's tool; it returns once the
-// client's result is in.
+// client's result is in. args "" makes the call carry no arguments field
+// at all, as it does while its input is still being written (#4611).
 func (c *tuiCalls) call(id, args string) {
 	done := make(chan struct{})
 	c.called[id] = done
 	go func() {
 		defer close(done)
-		r := httptest.NewRequest("POST", "/", strings.NewReader(`{"tool_call_id":"`+id+`","name":"Read","arguments":`+args+`}`))
+		body := `{"tool_call_id":"` + id + `","name":"Read"`
+		if args != "" {
+			body += `,"arguments":` + args
+		}
+		body += `}`
+		r := httptest.NewRequest("POST", "/", strings.NewReader(body))
 		r.SetPathValue("token", "run")
 		c.bridge.mcpCall(httptest.NewRecorder(), r)
 	}()
@@ -251,5 +257,92 @@ func TestClaudeTUIParallelCallsBeforeTheirMessage(t *testing.T) {
 				t.Fatalf("third reply %q %v %q %d:\n%s", text, calls, stop, out, raw)
 			}
 		})
+	}
+}
+
+// A message's second call may come in before its input is written: Claude
+// Code makes the calls of one message side by side, and the input of one
+// still being streamed is left out of the call it hands over (#4611). Told
+// as it came, it reaches the client with no arguments and fails; held, it
+// is told whole by the message written after it.
+func TestClaudeTUICallWithNoInputYetWaitsForItsMessage(t *testing.T) {
+	c := newTUICalls(t)
+	first := c.run.segment
+	c.call("toolu_a", `{"p":1}`)
+	if _, calls, _, _, raw := c.reply(first); len(calls) != 1 || calls[0] != `toolu_a{"p":1}` {
+		t.Fatalf("first reply %v:\n%s", calls, raw)
+	}
+	seg := c.answer("toolu_a")
+	c.call("toolu_b", "")     // its input not written yet: no arguments at all
+	time.Sleep(3 * callFirst) // the call's own turn to tell the client passes
+	c.write(
+		tuiRow("msg_late", tuiCall("toolu_a", 1), "tool_use", 40),
+		tuiRow("msg_late", tuiCall("toolu_b", 2), "tool_use", 40),
+	)
+	text, calls, stop, _, raw := c.reply(seg)
+	if text != "" || len(calls) != 1 || calls[0] != `toolu_b{"p":2}` || stop != "tool_use" {
+		t.Fatalf("second reply %q %v %q:\n%s", text, calls, stop, raw)
+	}
+	c.answer("toolu_b") // the result, once the client has run it
+}
+
+// se is a stream_event line, as the helper tells what its tap read.
+func se(event string) string { return `{"type":"stream_event","event":` + event + `}` }
+
+// A streamed message's call is told once: its call, come before its
+// stream ends, doesn't tell the client itself too.
+func TestClaudeTUIStreamedCallToldOnce(t *testing.T) {
+	c := newTUICalls(t)
+	first := c.run.segment
+	c.write(
+		se(`{"type":"message_start","message":{"id":"msg_call","model":"claude-haiku-5-5","usage":{"input_tokens":3}}}`),
+		se(`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`),
+		se(`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"reading"}}`),
+		se(`{"type":"content_block_stop","index":0}`),
+		se(`{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_a","name":"mcp__magpie__Read","input":{}}}`),
+		se(`{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"p\":1}"}}`),
+	)
+	c.call("toolu_a", `{"p":1}`)
+	time.Sleep(3 * callFirst) // the call's own turn to tell the client passes
+	c.write(
+		se(`{"type":"content_block_stop","index":1}`),
+		se(`{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":40}}`),
+		se(`{"type":"message_stop"}`),
+		tuiRow("msg_call", `{"type":"text","text":"reading"}`, "tool_use", 40),
+		tuiRow("msg_call", tuiCall("toolu_a", 1), "tool_use", 40),
+	)
+	text, calls, stop, _, raw := c.reply(first)
+	if text != "reading" || len(calls) != 1 || calls[0] != `toolu_a{"p":1}` || stop != "tool_use" {
+		t.Fatalf("first reply %q %v %q:\n%s", text, calls, stop, raw)
+	}
+}
+
+// A streamed message's whole rows can come as the next message streams,
+// the transcript behind the tap: they are that message's, not one more.
+func TestClaudeTUILateRowOfStreamed(t *testing.T) {
+	c := newTUICalls(t)
+	first := c.run.segment
+	c.write(
+		se(`{"type":"message_start","message":{"id":"msg_1","model":"claude-haiku-5-5","usage":{"input_tokens":3}}}`),
+		se(`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`),
+		se(`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"a"}}`),
+		se(`{"type":"content_block_stop","index":0}`),
+		se(`{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"srvtoolu_1","name":"WebSearch","input":{}}}`),
+		se(`{"type":"content_block_stop","index":1}`),
+		se(`{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":4}}`),
+		se(`{"type":"message_stop"}`),
+		se(`{"type":"message_start","message":{"id":"msg_2","model":"claude-haiku-5-5","usage":{"input_tokens":3}}}`),
+		se(`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`),
+		tuiRow("msg_1", `{"type":"text","text":"a"}`, "tool_use", 4),
+		se(`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"b"}}`),
+		se(`{"type":"content_block_stop","index":0}`),
+		se(`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}`),
+		se(`{"type":"message_stop"}`),
+		tuiRow("msg_2", `{"type":"text","text":"b"}`, "end_turn", 2),
+		tuiDone,
+	)
+	text, _, stop, _, raw := c.reply(first)
+	if text != "ab" || stop != "end_turn" {
+		t.Fatalf("reply %q %q:\n%s", text, stop, raw)
 	}
 }

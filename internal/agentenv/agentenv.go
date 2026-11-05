@@ -29,7 +29,7 @@ package agentenv
 // of them, and sets back the ones its own fixtures need.
 var Vars = []string{
 	// Claude Code, Codex and Copilot CLI
-	"CLAUDE_CONFIG_DIR", "CODEX_HOME", "COPILOT_HOME",
+	"CLAUDE_CONFIG_DIR", "CODEX_HOME", "COPILOT_HOME", "COPILOT_PROVIDERS_CONFIG",
 	// Claude Code's temp folder, the images its sessions were given
 	"CLAUDE_CODE_TMPDIR",
 	// Zed, or a fork of it that keeps its settings (ZedG)
@@ -38,6 +38,8 @@ var Vars = []string{
 	"CODEX_SQLITE_HOME",
 	// Gemini CLI's session/config home
 	"GEMINI_CLI_HOME",
+	// Antigravity's gateway, which wins over its settings.json
+	"AGY_LLM_GATEWAY_URL",
 	// Cline: its folder, its data, its sessions and its MCP settings file
 	"CLINE_DIR", "CLINE_DATA_DIR", "CLINE_SESSION_DATA_DIR", "CLINE_MCP_SETTINGS_PATH",
 	// Pi and its forks (OmO, Senpi), whose profile and config are apart
@@ -69,6 +71,9 @@ var Vars = []string{
 	"ANTE_HOME",
 	// NewMax's data folder (its newmax.db), ~/.newmax without it
 	"NEWMAX_USER_DATA_DIR",
+	// LiveAgent's data folder (K-brain's config.json), else the one
+	// ~/.liveagent/data-dir.json points to, else ~/.liveagent
+	"LIVEAGENT_HOME", "K_BRAIN_HOME",
 	// AstrBot's root, the folder holding its data/ (else ~/.astrbot, the desktop app's)
 	"ASTRBOT_ROOT",
 	// jcode's folder, ~/.jcode without it
@@ -100,6 +105,9 @@ var Vars = []string{
 	"ATOMCODE_HOME",
 	// Snow CLI's config folder, ~/.snow without it
 	"SNOW_CONFIG_DIR",
+	// QwenPaw's working folder (~/.qwenpaw, or a legacy ~/.copaw, without
+	// it) and its secret folder, <working folder>.secret without it
+	"QWENPAW_WORKING_DIR", "QWENPAW_SECRET_DIR",
 	// Cursor's CLI: its config folder (its chats) and its data folder
 	"CURSOR_CONFIG_DIR", "CURSOR_DATA_DIR",
 	// OpenCode and OpenChamber

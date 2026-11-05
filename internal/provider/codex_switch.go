@@ -19,10 +19,13 @@ package provider
 // the sign-in. In order, the gateway goes to the first until it is used
 // up or refused, so the sign-in moves only once it is used up (#530).
 //
-// The account it moved from is the one the user made first, and it stays
-// that: once it is no longer low (backShare) the agent is signed back in
-// to it, as Smart gives it requests again then (#408). A switch the user
-// makes meanwhile ends that. With KeepLogin on the subscription, the agent
+// The account it moved from is the one the user made first, and where the
+// sign-in follows the gateway it stays that: once it is no longer low
+// (backShare) the agent is signed back in to it, as Smart gives it
+// requests again then (#408). Where the sign-in alone spends the accounts
+// (returnsToFirst), or the gateway itself stays on the next (Until used
+// up), the agent stays on the one it moved to till that is spent too. A
+// switch the user makes meanwhile ends that. With KeepLogin on the subscription, the agent
 // stays signed in to the first, whatever it has left (#524); with
 // KeepLoginAs, to that account, wherever it stands in the order. Not while
 // magpie only switches the sign-in (SwitchOnly): moving it is then all
@@ -46,6 +49,13 @@ import (
 	"github.com/yetone/magpie/internal/catalog"
 	"github.com/yetone/magpie/internal/lastgood"
 )
+
+// ClaudeThroughMagpie is set by the agent package: whether Claude Code's
+// settings send its requests to magpie's gateway (ANTHROPIC_BASE_URL),
+// whatever its model and however it signs in there. NextLogin then never
+// moves its sign-in off a spent account. false until it is set, and in a
+// process without the agent package.
+var ClaudeThroughMagpie = func() bool { return false }
 
 // loginSwitchEvery is how often the account each agent is on is looked at.
 const loginSwitchEvery = 5 * time.Minute
@@ -116,9 +126,9 @@ const SpentShare = 98
 // SpentShareOf is the share past which routing counts an account spent:
 // SpentShare, but In order sends requests to the first until a window of it
 // is used up or the vendor refuses it, so there an account at 98% is still
-// tried in its turn (#530).
+// tried in its turn (#530); Until used up stays on one until then too.
 func SpentShareOf(routing string) float64 {
-	if routing == Ordered {
+	if routing == Ordered || routing == Drain {
 		return 100
 	}
 	return SpentShare
@@ -128,12 +138,39 @@ func SpentShareOf(routing string) float64 {
 // says: the share the account it is on is moved off at, and whether it is
 // kept on the first instead (keepsLogin).
 func loginSwitching(agent string) (share float64, keep bool) {
-	for _, p := range load().Providers {
+	for _, p := range storedFile().Providers {
 		if p.ID == agent {
 			return SpentShareOf(p.Routing), p.keepsLogin()
 		}
 	}
 	return SpentShare, false
+}
+
+// returnsToFirst says whether magpie signs agent back in to the account
+// it moved it off once that has room again (#408), rather than leaving it
+// on the one it moved it to till that is spent in turn. The sign-in goes
+// back where it follows the gateway: Codex's requests go through magpie,
+// whose Smart and In order give the first account requests again once it
+// has room (#209), and In order on any subscription is the user's word
+// that the first comes first. Where the sign-in is what spends the
+// accounts — Claude Code asks Anthropic itself, and Codex whose sign-in
+// alone magpie switches (SwitchOnly) — going back at the first's reset
+// left the account moved to part used and started the first's next
+// window early, which is not "use one up, then the next" (hxy920830 on
+// X): there it stays, unless the user said the first comes first. Nor
+// does Codex's go back when it is routed Until used up: the gateway then
+// keeps its requests on the account it moved to (routes.Drain), so Codex
+// signed back in to the first showed that one in use while the other's
+// allowance was spent (WalterAIBuilder on X); it stays with the requests.
+func returnsToFirst(agent string) bool {
+	for _, p := range storedFile().Providers {
+		if p.ID == agent {
+			// kept on the first (KeepLogin), set aside under SwitchOnly,
+			// is still the user's word that the first comes first
+			return p.Routing == Ordered || p.KeepLogin || agent == "codex" && !p.SwitchOnly && p.Routing != Drain
+		}
+	}
+	return agent == "codex"
 }
 
 // backShare is the share below which the account magpie moved the agent
@@ -251,7 +288,7 @@ func NextLogin(ctx context.Context, agent string) (from, to string, back, ok boo
 	// spares only once the one it is on is spent (below): every account
 	// read at once on each look was a burst no official client makes
 	var firstUser string
-	if first != nil {
+	if first != nil && returnsToFirst(agent) {
 		firstUser = first.User
 	}
 	u := someLoginUsage(ctx, agent, from, firstUser)
@@ -266,10 +303,22 @@ func NextLogin(ctx context.Context, agent string) (from, to string, back, ok boo
 	// to go on with) is spent whatever its windows read: the app sends
 	// nothing for it, and a workspace seat at its owner's limit or a spend
 	// cap is held with every window under the share
-	if first != nil && first.On && first.Lapsed == "" {
+	if first != nil && first.On && first.Lapsed == "" && returnsToFirst(agent) {
 		if q, known := u[first.User]; known && q.Error == "" && !q.Held && !usedPast(q, backShare, now) && !capped(first.User, q) {
 			return from, first.User, true, true
 		}
+	}
+	// Claude Code sending its requests to the gateway: the gateway moves
+	// them on to an account with room by itself, so the sign-in moved off
+	// a spent account served nothing and only took away what Claude Code
+	// has as that account, its claude.ai connectors (MCP) among them. The
+	// user set Claude Code back to their main account over and over, and
+	// magpie moved it to their quota account again each time (oreoft on
+	// Discord). It stays where the user put it then; moving it is all
+	// magpie is asked to do under SwitchOnly, whose accounts the gateway
+	// doesn't serve.
+	if agent == "claude" && ClaudeThroughMagpie() && !SwitchOnly(agent) {
+		return "", "", false, false
 	}
 	// kept on the first, it stays there however little that has left; and
 	// it moves on at the share its routing counts the account spent at.
@@ -277,6 +326,11 @@ func NextLogin(ctx context.Context, agent string) (from, to string, back, ok boo
 	// on every account, however its reading came
 	q, known := u[from]
 	if keep || !known || q.Error != "" || !q.Held && !usedPast(q, share, now) && !capped(from, q) {
+		return "", "", false, false
+	}
+	if agent == "codex" && !q.Held && !capped(from, q) && spendsFirst(from, q) {
+		// set to spend its credits before another account, and holding
+		// some: Codex stays on it (jojonas_xyz on X)
 		return "", "", false, false
 	}
 	users := make([]string, 0, len(spares))
@@ -315,6 +369,13 @@ func NextLogin(ctx context.Context, agent string) (from, to string, back, ok boo
 		return from, best, false, true
 	}
 	return "", "", false, false
+}
+
+// spendsFirst says whether the Codex account user, read as q, is set to
+// spend its credits before another account (CodexCreditsFirst) and holds
+// some, as its windows say (QuotaWindow.Credits).
+func spendsFirst(user string, q SubscriptionQuota) bool {
+	return CodexCreditsFirst(user) && slices.ContainsFunc(q.Windows, func(w QuotaWindow) bool { return w.Credits })
 }
 
 // roomMargin is how much more room (roomLeft) an account past its line
@@ -427,7 +488,7 @@ func SwitchWhenSpent(ctx context.Context, agent string) (string, error) {
 	}
 	// the first moved off, not one moved to on the way
 	r, _ := loginReturnOf(agent, from)
-	if err := switchLogin(agent, to); err != nil {
+	if err := switchLoginBy(agent, to, true); err != nil {
 		return "", err
 	}
 	if back {
@@ -446,12 +507,18 @@ func SwitchWhenSpent(ctx context.Context, agent string) (string, error) {
 		share, _ := loginSwitching(agent)
 		log.Printf("%s: %s has used %g%% or more of its allowance; signed it in to %s", agent, from, share, to)
 		if agent == "codex" {
-			codexAppSpentSwitch()
+			codexAppSwitched(true, true)
 		}
 	}
 	if agent == "codex" {
 		if was := CodexAppStale(); was != "" {
-			log.Printf("codex: the Codex app is still signed in to %s, and shows its limits, until its app-server is restarted once no Codex turn runs", was)
+			// a switch off a spent account restarts it either way: left on
+			// that account, the app greys Send for every model
+			if codexRestartsApp() || !back {
+				log.Printf("codex: the Codex app is still signed in to %s, and shows its limits, until its app-server is restarted once no Codex turn runs", was)
+			} else {
+				log.Printf("codex: the Codex app is still signed in to %s, and shows its limits, until it is restarted: magpie restarts it for a switch back only with \"Restart the Codex app to follow\" on", was)
+			}
 		}
 	}
 	// the models the agent is offered are the new account's plan's
@@ -582,6 +649,7 @@ func KeepOnAnAccountWithRoom(ctx context.Context) {
 		syncClaudeProxyEnvNow()
 		c, cancel := context.WithTimeout(ctx, time.Minute)
 		noteCodexUsedUp(CodexUsedUp(c))
+		restartCodexAppLeftOnSpent(c)
 		cancel()
 		// Codex's own sign-in refused for good, or signed in again since
 		noteCodexGoneNow()
@@ -591,6 +659,45 @@ func KeepOnAnAccountWithRoom(ctx context.Context) {
 		t.Reset(min(every, claudeLookEvery))
 	}
 }
+
+// restartCodexAppLeftOnSpent has the Codex app's app-server restarted, as
+// a switch off a used-up account has it (codexAppSwitched spent), when it
+// is still on an account Codex was switched off (CodexAppStale) and that
+// account is now held (codexHeld). magpie's switch back to the first, or to
+// the account Codex is kept signed in to, leaves the app running unless
+// RestartApp is on, and the app-server keeps the account it started on:
+// once that one ran out, the app greyed Send for every model, magpie's and
+// another provider's too, while magpie read only the account Codex is
+// signed in to, which had room, and never restarted it (nb5p on Discord:
+// B first in magpie, the app on A). Once for each app-server left.
+func restartCodexAppLeftOnSpent(ctx context.Context) {
+	was := CodexAppStale()
+	if was == "" {
+		return
+	}
+	codexDaemonMu.Lock()
+	left := codexAppLeft
+	done := left == codexAppLeftRestarted
+	codexDaemonMu.Unlock()
+	if done || !strings.EqualFold(left.user, was) {
+		return
+	}
+	for user, q := range someLoginUsage(ctx, "codex", was) {
+		if !strings.EqualFold(user, was) || q.Error != "" || !q.Held {
+			continue
+		}
+		codexDaemonMu.Lock()
+		codexAppLeftRestarted = left
+		codexDaemonMu.Unlock()
+		log.Printf("codex: the Codex app is still signed in to %s, which is used up; its app-server is restarted once no Codex turn runs, for the app to read the account Codex is signed in to", was)
+		codexAppSwitched(true, false)
+		return
+	}
+}
+
+// codexAppLeftRestarted is the app-server left on an account that
+// restartCodexAppLeftOnSpent last had restarted. codexDaemonMu is held.
+var codexAppLeftRestarted leftDaemon
 
 // firstSignInLook is when KeepOnAnAccountWithRoom first looks. A var so
 // tests can say.

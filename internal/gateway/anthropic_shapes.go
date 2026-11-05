@@ -563,7 +563,7 @@ func withoutZCodeSystem(body []byte) []byte {
 	if !ok {
 		return body
 	}
-	text := systemText(system)
+	text := systemTextOf(system)
 	msgs, _ := m["messages"].([]any)
 	first := -1
 	for i, raw := range msgs {
@@ -593,7 +593,7 @@ func withoutZCodeSystem(body []byte) []byte {
 
 // systemText is a request's system as its text: a string, or its text
 // blocks' in order.
-func systemText(v any) string {
+func systemTextOf(v any) string {
 	switch s := v.(type) {
 	case string:
 		if strings.TrimSpace(s) == "" {

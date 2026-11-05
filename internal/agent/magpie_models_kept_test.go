@@ -59,3 +59,52 @@ func TestMagpieModelsKeptWhileCatalogStays(t *testing.T) {
 		t.Fatal("a model hidden from pi since is still listed")
 	}
 }
+
+// viaMagpie, every agent's model picker, is kept the same way: Claude
+// Code's options alone (claudeViaMagpie) were 4.7 GB of the 33 GB.
+func TestViaMagpieKeptWhileCatalogStays(t *testing.T) {
+	syncHome(t)
+	if err := provider.Save(provider.Provider{ID: "oa", Name: "OA", Key: "k", Chat: "http://127.0.0.1:1/v1", Models: []string{"gpt-5.5", "gpt-5.4"}}); err != nil {
+		t.Fatal(err)
+	}
+	refs := func(prefix string) map[string]bool {
+		out := map[string]bool{}
+		for _, o := range viaMagpie("pi", prefix) {
+			out[o.Value] = true
+		}
+		return out
+	}
+	if got := refs(""); !got["oa/gpt-5.5"] || !got["oa/gpt-5.4"] {
+		t.Fatalf("oa's models not offered: %v", got)
+	}
+	// a prefix is kept apart from the bare list
+	if got := refs("magpie/"); !got["magpie/oa/gpt-5.5"] {
+		t.Fatalf("the prefixed list: %v", got)
+	}
+	built := testing.AllocsPerRun(5, func() { buildVia("pi", "") })
+	kept := testing.AllocsPerRun(20, func() { viaMagpie("pi", "") })
+	if kept > 100 || kept*5 > built {
+		t.Fatalf("options already built took %.0f allocations, building them %.0f", kept, built)
+	}
+	mine := viaMagpie("pi", "")
+	for i := range mine {
+		mine[i].Value += "[1m]"
+	}
+	if got := refs(""); !got["oa/gpt-5.5"] {
+		t.Fatalf("a caller's write reached the options kept: %v", got)
+	}
+	if err := provider.Save(provider.Provider{ID: "nb", Name: "NB", Key: "k", Chat: "http://127.0.0.1:1/v1", Models: []string{"x"}}); err != nil {
+		t.Fatal(err)
+	}
+	if !refs("")["nb/x"] {
+		t.Fatal("a provider saved since is not offered")
+	}
+	s := settings.Load()
+	s.HiddenModels = map[string][]string{"pi": {"oa/gpt-5.4"}}
+	if err := settings.Save(s); err != nil {
+		t.Fatal(err)
+	}
+	if refs("")["oa/gpt-5.4"] {
+		t.Fatal("a model hidden from pi since is still offered")
+	}
+}

@@ -130,6 +130,13 @@ var (
 	memRoot = "/"
 )
 
+// memOwn says memLimit reads this computer, so where it reads nothing
+// the computer's memory may stand in. A test's root is not this computer
+// even when it names this computer's system: such a root, holding
+// nothing, read the test machine's own memory as its own (#5118, on Linux
+// CI and WSL).
+func memOwn() bool { return memGOOS == runtime.GOOS && memRoot == "/" }
+
 // memLimit is the memory magpie's processes may use, in bytes, and where
 // that is said; 0 when not known.
 func memLimit(goos, root string) (int64, string) {
@@ -164,13 +171,14 @@ func memLimit(goos, root string) (int64, string) {
 		}
 		switch {
 		case parts[0] == "0" && parts[1] == "":
-			// v2: this cgroup's limits and every one above it. A cgroup's
-			// path is a Unix one: filepath.Dir on Windows turns "/" into
-			// "\" and would walk up from it for ever
+			// v2: this cgroup's limits and every one above it. The
+			// cgroup path is a "/" path whatever the host reads it on,
+			// so the walk is path's: filepath's root is "\" on Windows,
+			// where dir never read "/" and the loop never ended (#4113).
 			for dir := path.Clean("/" + parts[2]); ; dir = path.Dir(dir) {
 				for _, name := range []string{"memory.max", "memory.high"} {
 					if n, ok := readLimit(filepath.Join(cgroups, dir, name)); ok {
-						least(n, "cgroup "+filepath.Join(dir, name))
+						least(n, "cgroup "+path.Join(dir, name))
 					}
 				}
 				if dir == "/" {

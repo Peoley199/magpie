@@ -26,7 +26,7 @@ func (z *zcodeStartVendor) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	z.systems = append(z.systems, b["system"])
 	z.bodies = append(z.bodies, b)
 	z.mu.Unlock()
-	if systemText(b["system"]) != "" {
+	if systemTextOf(b["system"]) != "" {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(405)
 		w.Write([]byte(`{"code":3012,"msg":"Method Not Allowed","data":null}`))
@@ -64,7 +64,7 @@ func TestZCodeStartPlanTakesNoSystem(t *testing.T) {
 	if len(v.systems) != 1 {
 		t.Fatalf("asked %d times", len(v.systems))
 	}
-	if systemText(v.systems[0]) != "" {
+	if systemTextOf(v.systems[0]) != "" {
 		t.Fatalf("the system went to the Start Plan: %v", v.systems[0])
 	}
 	msgs := v.bodies[0]["messages"].([]any)

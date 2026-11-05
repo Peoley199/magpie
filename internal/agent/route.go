@@ -27,8 +27,85 @@ const RoutingGroups = "Routing groups"
 
 // viaMagpie lists the catalog as agent is shown it, for a picker: the
 // routing groups first, in one group of their own, then one group per
-// provider.
+// provider. Built again only when provider.StampNow moved, or
+// magpieModelsFor after it was; each caller is given its own copy.
 func viaMagpie(agent, prefix string) []Option {
+	return slices.Clone(viaMagpieShared(agent, prefix))
+}
+
+// viaMagpieShared is viaMagpie without a copy of its own, for a caller
+// that only reads it or appends it onto a list of its own: a copy for each
+// of an agent's fields was 42 MB of what twenty window polls allocated.
+// An append onto it makes a copy, but its Options are never written into.
+func viaMagpieShared(agent, prefix string) []Option {
+	return builtOptions.shared(agent+"\x00"+prefix, func() []Option { return buildVia(agent, prefix) })
+}
+
+// withVia is append(own, viaMagpieShared(agent, prefix)...), the list a
+// model field offers, kept while own reads the same and the catalog's list
+// is the one kept: the append copied the whole catalog for each field of
+// each agent, every poll, about 60 MB of what forty polls of the Agents
+// page allocated with real accounts. Read only, as viaMagpieShared's.
+func withVia(own []Option, agent, prefix string) []Option {
+	via := viaMagpieShared(agent, prefix)
+	if len(own) == 0 {
+		return via
+	}
+	return joinedVia(own, via, [2]string{agent, prefix})
+}
+
+// joinedVia is append(own, via...) for a field whose via is a shared list,
+// kept under key while own reads the same and via is the list kept (see
+// withVia). Read only; with no own models it is still a list apart from
+// via, as Claude Code's model field has always given.
+func joinedVia(own, via []Option, key [2]string) []Option {
+	joinedOptions.Lock()
+	defer joinedOptions.Unlock()
+	if j, ok := joinedOptions.m[key]; ok && sameList(j.via, via) && slices.EqualFunc(j.own, own, sameOption) {
+		return j.out
+	}
+	out := make([]Option, 0, len(own)+len(via))
+	out = append(append(out, own...), via...)
+	if joinedOptions.m == nil {
+		joinedOptions.m = map[[2]string]joinedList{}
+	}
+	joinedOptions.m[key] = joinedList{own: out[:len(own)], via: via, out: out}
+	return out
+}
+
+var joinedOptions struct {
+	sync.Mutex
+	m map[[2]string]joinedList
+}
+
+type joinedList struct{ own, via, out []Option }
+
+// sameList reports whether a and b are the one list kept: the same array,
+// as long.
+func sameList(a, b []Option) bool {
+	return len(a) == len(b) && (len(a) == 0 || &a[0] == &b[0])
+}
+
+// sameOption reports whether a and b read the same, field by field.
+func sameOption(a, b Option) bool {
+	return a.Value == b.Value && a.Label == b.Label && a.Note == b.Note && a.Icon == b.Icon &&
+		slices.Equal(a.Icons, b.Icons) && a.Group == b.Group && a.GroupIcon == b.GroupIcon &&
+		a.Ref == b.Ref && a.Free == b.Free && a.Zero == b.Zero && a.Rate == b.Rate && a.RateWas == b.RateWas &&
+		a.Context == b.Context && a.Takes == b.Takes && a.Direct == b.Direct && a.Via == b.Via &&
+		a.Same == b.Same && a.Served == b.Served && a.Alias == b.Alias && a.FastFor == b.FastFor &&
+		a.Fast == b.Fast && a.OwnFast == b.OwnFast && a.UltraOK == b.UltraOK && a.Ultra == b.Ultra &&
+		a.own == b.own && a.sub == b.sub
+}
+
+// builtOptions is what viaMagpie built last, per agent and prefix. Each
+// agent's model field offers it, and the window's drift poll asked every
+// field's options of every agent each 15s: Claude Code's alone
+// (claudeViaMagpie) allocated 4.7 GB of the 33 GB a live magpie did in 53
+// minutes.
+var builtOptions stampedLists[Option]
+
+// buildVia is viaMagpie built afresh.
+func buildVia(agent, prefix string) []Option {
 	var out, groups []Option
 	shown, _ := provider.CatalogFor(agent)
 	// own: whether a provider is the account the agent is signed in to,
@@ -71,6 +148,7 @@ func viaMagpie(agent, prefix string) []Option {
 		return u
 	}
 	fast, ultra := provider.FastPicks(agent), provider.UltraPicks(agent)
+	set := settings.Shared()   // the prices the user set, read once for the list
 	var tiered map[string]bool // provider.UltraModels, read at the first fast model
 	for _, e := range shown {
 		if e.Group != "" {
@@ -85,6 +163,9 @@ func viaMagpie(agent, prefix string) []Option {
 		o := Option{Value: prefix + e.ID, Label: e.Name, Note: note,
 			Icon: e.Provider.Icon, Group: e.Provider.Name, Ref: e.ID, Free: e.Free, Rate: e.Rate, RateWas: e.RateWas, Context: e.Context, own: own[e.Provider.ID],
 			sub: e.Provider.Account != nil && (e.Provider.Account.Agent != "claude" || agent == "claude")}
+		if !e.Free {
+			o.Zero = e.Provider.PricedFree(set, e.Model)
+		}
 		// a model with a fast mode is switched fast in the picker (#954)
 		if provider.CanFast(e.Provider, e.Model) {
 			o.FastFor, o.Fast = agent, slices.Contains(fast, e.ID)
@@ -186,22 +267,16 @@ func firstOf(xs []string) string {
 // provider.StampNow moved, or magpieModelsFor after it was, each caller
 // given its own copy of the list.
 func magpieModels(agent string) []catalog.Model {
-	builtModels.Lock()
-	b, ok := builtModels.m[agent]
-	builtModels.Unlock()
-	// the stamp is read before the list is built: a change while it is
-	// moves it past the one kept, and the next call builds it again
-	stamp := provider.StampNow()
-	if !ok || b.stamp != stamp || time.Since(b.at) >= magpieModelsFor {
-		b = builtList{buildModels(agent), stamp, time.Now()}
-		builtModels.Lock()
-		if builtModels.m == nil {
-			builtModels.m = map[string]builtList{}
-		}
-		builtModels.m[agent] = b
-		builtModels.Unlock()
-	}
-	return slices.Clone(b.models)
+	return builtModels.get(agent, func() []catalog.Model { return buildModels(agent) })
+}
+
+// sharedModels is magpieModels without the caller's own copy, for one
+// that only reads it: a range over it copies each model, so it can't
+// write into the list kept. A copy per call was 37 MB of what forty polls
+// of the window allocated with real accounts, most of it Pi's and Claude
+// Code's thinking levels, read per field.
+func sharedModels(agent string) []catalog.Model {
+	return builtModels.shared(agent, func() []catalog.Model { return buildModels(agent) })
 }
 
 // builtModels is what magpieModels built last, per agent. The window asks
@@ -209,15 +284,43 @@ func magpieModels(agent string) []catalog.Model {
 // per field, each built whole with its prices and Vision's ranking of the
 // models that see: 14.5 GB of the 33 GB a live magpie allocated in 53
 // minutes, the garbage its footprint peaks on.
-var builtModels struct {
+var builtModels stampedLists[catalog.Model]
+
+// stampedLists keeps a list built per key while provider.StampNow stays
+// the same, magpieModelsFor at most, and gives each caller a copy.
+type stampedLists[T any] struct {
 	sync.Mutex
-	m map[string]builtList
+	m map[string]stampedList[T]
 }
 
-type builtList struct {
-	models []catalog.Model
-	stamp  provider.Stamp
-	at     time.Time
+type stampedList[T any] struct {
+	list  []T
+	stamp provider.Stamp
+	at    time.Time
+}
+
+func (s *stampedLists[T]) get(key string, build func() []T) []T {
+	return slices.Clone(s.shared(key, build))
+}
+
+// shared is get without the caller's own copy: the list kept, read only.
+func (s *stampedLists[T]) shared(key string, build func() []T) []T {
+	s.Lock()
+	b, ok := s.m[key]
+	s.Unlock()
+	// the stamp is read before the list is built: a change while it is
+	// moves it past the one kept, and the next call builds it again
+	stamp := provider.StampNow()
+	if !ok || b.stamp != stamp || time.Since(b.at) >= magpieModelsFor {
+		b = stampedList[T]{build(), stamp, time.Now()}
+		s.Lock()
+		if s.m == nil {
+			s.m = map[string]stampedList[T]{}
+		}
+		s.m[key] = b
+		s.Unlock()
+	}
+	return slices.Clip(b.list)
 }
 
 // magpieModelsFor is how long a list is kept while provider.StampNow says
@@ -237,8 +340,9 @@ func buildModels(agent string) []catalog.Model {
 	shown, _ := provider.CatalogFor(agent)
 	labels := provider.Labels(shown)
 	// a model magpie describes images to takes them (provider.Described)
-	seen := provider.Described != nil && provider.Described()
-	st, find := settings.Load(), provider.GroupFinder()
+	seen := describedNow()
+	// the agent's own Long conversations, if it has one (ForAgent)
+	st, find := settings.Load().ForAgent(agent), provider.GroupFinder()
 	priceOf := provider.AgentPricer(st, find)
 	members := func(id string) []provider.Member {
 		_, ms, _ := find(id)
@@ -313,6 +417,19 @@ func buildModels(agent string) []catalog.Model {
 	}
 	return out
 }
+
+// describedNow is provider.Described, asked once for every agent's list
+// while provider.StampNow stays the same, magpieModelsFor at most, as the
+// lists are kept: each list built asked the gateway's Vision pick again,
+// which ranks every provider's models that see, 553 MB of what a live
+// magpie allocated in 37 minutes for the same answer a dozen times over.
+func describedNow() bool {
+	return builtSeen.shared("", func() []bool {
+		return []bool{provider.Described != nil && provider.Described()}
+	})[0]
+}
+
+var builtSeen stampedLists[bool]
 
 // allResponses reports whether a group's members are all served best on
 // Responses, so the gateway relays a Responses request to whichever it

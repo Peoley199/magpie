@@ -34,6 +34,10 @@ type Option struct {
 	GroupIcon string `json:"groupIcon,omitempty"`
 	Ref       string `json:"ref,omitempty"`  // the catalog model, the same in every agent
 	Free      bool   `json:"free,omitempty"` // costs its subscription nothing
+	// Zero is a model its provider lists at $0 (provider.PricedFree), where
+	// Free is the vendor's own word: the picker says free by it too
+	// (jiangguochao666 on X)
+	Zero bool `json:"zero,omitempty"`
 	// Rate and RateWas are the credits a request costs its subscription,
 	// as a multiple, and before a discount running now (Qoder's 0.5×,
 	// WorkBuddy's x0.03), when its vendor lists them
@@ -627,9 +631,11 @@ func Detected() []*Agent {
 }
 
 // Find resolves a user-typed name (id, alias, or unique prefix).
-func Find(q string) (*Agent, error) {
+func Find(q string) (*Agent, error) { return FindIn(All(), q) }
+
+// FindIn is Find among all, a list of All() the caller has built already.
+func FindIn(all []*Agent, q string) (*Agent, error) {
 	q = strings.ToLower(strings.TrimSpace(q))
-	all := All()
 	var prefix []*Agent
 	for _, a := range all {
 		if strings.EqualFold(a.ID, q) { // codex@wsl:Ubuntu
