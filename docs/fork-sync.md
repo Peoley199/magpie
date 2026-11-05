@@ -1,8 +1,9 @@
 # Fork 同步与构建手册（Peoley199/magpie）
 
 本 fork 的上游是 `yetone/magpie`（remote 名 `upstream`），fork 自己的改动长期保留在上游之外。
-本文是 2026-10-30／10-31／11-01 几轮同步（7499ebb5→cd10dfbe 700 提交、→cdf8151a 40、
-→ffa07395 4、→f7f2d75f 149、→380032cda 11、→854fc8161 237）沉淀的操作手册，配套两个脚本：
+本文是 2026-10-30／10-31／11-01／11-05 几轮同步（7499ebb5→cd10dfbe 700 提交、→cdf8151a 40、
+→ffa07395 4、→f7f2d75f 149、→380032cda 11、→854fc8161 237、→6abacd46c 827）沉淀的操作手册，
+配套两个脚本：
 
 - `scripts/fork-sync.sh` — 调查→方案→合并→验证→（推送）→构建，一条命令跑完；
 - `scripts/fork-suite-compare.sh` — 合并头与合并前基线的红测试对照（判断"回归还是预存"）。
@@ -20,8 +21,8 @@
 
 | 指纹（文件 + 特征串） | 作用 |
 | --- | --- |
-| `internal/gateway/claude_room.go` 里的 `dir := path.Clean`（**不是** `filepath.Clean`） | memLimit 的 cgroup 路径是 Unix 路径，Windows 上 `filepath` 会死循环 |
-| `internal/gateway/anthropic_shapes.go` 里的 `zcodeStartPlan` / `withoutZCodeSystem` / `systemText` | ZCode Start Plan（无 GLM key 的 zcode 插件账号）拒绝一切带 system 的请求（405/3012），发前摘除并把文本挪进首条用户消息 |
+| ~~`internal/gateway/claude_room.go` 的 `dir := path.Clean`~~ **已退役（11-05）**：上游 #4113 采纳了同一修复且是超集，fork 的 `1805cad0` 已放弃，该文件与上游逐字节相同 | memLimit 的 cgroup 路径是 Unix 路径，Windows 上 `filepath` 会死循环 |
+| `internal/gateway/anthropic_shapes.go` 里的 `zcodeStartPlan` / `withoutZCodeSystem` / `systemTextOf` | ZCode Start Plan（无 GLM key 的 zcode 插件账号）拒绝一切带 system 的请求（405/3012），发前摘除并把文本挪进首条用户消息。11-05 起用 `systemTextOf`：上游新测试声明了同名 helper，fork 的函数让名（见 11-05 节） |
 | `internal/gateway/workdir.go` 里的 `zcodeWorkDir` | ZCode 的 `- Primary working directory:` 行与 Claude Code 的 ` - ` 行区分 |
 | `internal/gateway/gateway.go` forwardOnce 里 `if to == provider.Anthropic && zcodeStartPlan(p)` | 上述摘除的调用点（在 `fitUserBetas` 之后） |
 | 测试：`internal/gateway/zcode_start_system_test.go`、`testdata/workdir/zcode-3.16.3.json`、`workdir_test.go` 的 ZCode 用例 | fork 自有，上游没有 |
@@ -124,6 +125,41 @@ remove），3 个"仅合并头红"。这三个都**在纯上游 `f7f2d75f2` 上�
 
 另外 `TestMaskedRecordKeepsSentAndBack`（上一轮红）这一轮转绿，属测试间状态相关，不是新问题。
 
+### 11-05（v0.1.2422→v0.1.3005，**827 提交**；16 包 81 红，0 回归）
+
+本轮第一次触发指纹守护的**真实分支**：上游 `9a951eb03`（#4113）采纳了我们的 memLimit 修复，
+且是超集（同样 `path.Clean`/`path.Dir`，另加 `path.Join` 标签和 #5118 的 `memOwn`）。按"上游已
+采纳 → 取上游、放弃我们的 delta"决策：`claude_room.go` 现在与上游逐字节相同，fork 的 `1805cad0`
+退役。指纹清单同步更新（见 §二）。
+
+合并又暴露一个 git 测不出的**语义冲突**：上游新测试 `zenfree_v2_test.go` 声明了 helper
+`systemText`，与 fork 的 Start Plan 代码里的同名不同签名函数撞车。fork 侧改名为
+`systemTextOf`（只动 fork 自己的文件）。指纹守护测不出这种撞名——记下这个盲区。
+
+基线对照：60 个签名一致、1 个同类变化（`TestHubRootsOfACodexThread`，上游加了 Session 字段）、
+20 个"仅合并头红"。这 20 个分布在 `sessions/agent/appdir/browsermcp/library/catalog/gui/claudetui`
+——全部与上游**逐字节相同**的包（`git diff upstream/main HEAD -- <pkg>` 为空，fork 只改
+internal/gateway），并在纯上游树上逐一复现（20/20 红）。归类：
+
+| 类别 | 测试 |
+| --- | --- |
+| Windows symlink 权限（library 的 WSL 测试，7 个） | `TestWSLSkillsLinked` 等 |
+| 分配字节上限（sync.Pool 负载相关，4 个） | `TestCCListingKeepsItsNames`（3000 文件 12146 allocs）、`TestClaudeViaMagpieKept`、`TestOwnOptionsKept`、`TestViaMagpieKeptWhileCatalogStays` |
+| 依赖真实外部程序（3 个） | `TestShimFirstMessageWaitsForTools`（shim 30s 没写字）、`TestDesktopHandlerNeedsItsEntryAndProgram`、`TestImageFromLeavesTheRest` |
+| 上游自己的断言在 Windows 失效（其余） | `TestOwnModelsSayTheyGoDirect`（OpenCode Go 模型列表）、`TestFoldersJoinedOnce`、`TestKimiOldSharedEntrySwept` 等 |
+
+转绿：`TestCodexModelEffortLetsUnrelatedCallsGo`、`TestLibraryMCPHub`、
+`TestSettingsSaveKeepsWhatItDoesNotSend`（上游修了它的 fixture）——都属负载/状态相关，不是新问题。
+
+**推送通道**：22 端口直连 github.com 被重置（连接重置），改走
+`ssh://git@ssh.github.com:443/…` + `ProxyCommand=connect -H 127.0.0.1:7897`。备用命令已记在
+`~/.ssh/config` 的注释里；一次性用法：
+
+```
+GIT_SSH_COMMAND='ssh -p 443 -i ~/.ssh/Project_JGame_Ugit -o IdentitiesOnly=yes -o ProxyCommand="connect -H 127.0.0.1:7897 ssh.github.com 443"' \
+  git push ssh://git@ssh.github.com:443/Peoley199/magpie.git main
+```
+
 ## 四、远端仓库的处理
 
 - **推送**：`git push origin main`，永远是 fast-forward（合并方式保证不改写历史）。禁止 rebase
@@ -131,7 +167,7 @@ remove），3 个"仅合并头红"。这三个都**在纯上游 `f7f2d75f2` 上�
 - **下次同步的起点**：合并后 `git merge-base main upstream/main` 就是上游最新提交——后续
   `git fetch upstream && git merge upstream/main` 天然只算增量，无需任何清理。
 - **tag**：上游 tag 用 `git fetch upstream --tags` 补拉；版本号以 `git describe --tags upstream/main`
-  为准（11-01 时是 v0.1.2422 = 854fc8161）。
+  为准（11-05 时是 v0.1.3005 = 6abacd46c）。
 - 合并提交信息按惯例：一行主题（提交数 + fork 修复保留）+ 正文（上游要点、fork 修复为何保留、
   冲突情况、跑了什么）。
 

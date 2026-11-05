@@ -65,11 +65,11 @@ sync() {
   step "3. fork fingerprints upstream must not have adopted"
   local adopted=0 fp pat file
   # fingerprint | the upstream file it would live in.
-  # Each one must tell our code from upstream's: `dir := path\.Clean` does
-  # not match filepath.Clean, while `path\.Clean(...)` alone matched inside
-  # it and reported upstream as having adopted a fix it does not have.
+  # Each one must tell our code from upstream's (a substring of a line
+  # upstream has reports a fix it does not have). The memLimit entry is
+  # gone: upstream adopted it as a superset (9a951eb03, #4113) and the
+  # fork's commit was dropped on 11-05 — see docs/fork-sync.md §二.
   for fp in \
-    'dir := path\.Clean|internal/gateway/claude_room.go' \
     'func zcodeStartPlan|internal/gateway/anthropic_shapes.go' \
     'zcodeWorkDir|internal/gateway/workdir.go'; do
     pat=${fp%|*}; file=${fp#*|}
@@ -86,7 +86,7 @@ sync() {
     die "the merge has conflicts — resolve by hand (docs/fork-sync.md §二)"
   fi
   local keep=0
-  for pat in 'dir := path\.Clean' 'func zcodeStartPlan' 'zcodeWorkDir'; do
+  for pat in 'func zcodeStartPlan' 'zcodeWorkDir'; do
     grep -rqE "$pat" internal/gateway/ || { keep=1; echo "MISSING after merge: $pat"; }
   done
   git merge --abort >/dev/null 2>&1
@@ -101,7 +101,7 @@ sync() {
   local n desc
   n=$(git rev-list --count main..upstream/main)
   desc=$(git describe --tags upstream/main 2>/dev/null || git rev-parse --short upstream/main)
-  git merge --no-ff upstream/main -m "Merge upstream yetone/magpie main ($(git rev-parse --short upstream/main)): $n commits, the fork's ZCode Start Plan / memLimit / workdir fixes kept
+  git merge --no-ff upstream/main -m "Merge upstream yetone/magpie main ($(git rev-parse --short upstream/main)): $n commits, the fork's ZCode Start Plan / workdir fixes kept
 
 Upstream to $desc. The fork's own commits ride through the merge
 unchanged (docs/fork-sync.md §二); fingerprints verified on the merged
