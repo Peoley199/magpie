@@ -53,11 +53,12 @@ func TestWorkDirLastSaidAndOnlyByTheAgent(t *testing.T) {
 	if got := workDir(req); got != "/from/a/tool" {
 		t.Errorf("a tool's: %q", got)
 	}
-	// Claude Code's environment line, dash-led, moving folder: the (was …)
-	// is stripped, as the bare line above is, and not kept by ZCode's
-	// wider match taking the same label without stripping
+	// Claude Code's environment line, dash-led, moving folder, in a
+	// system message — the caller's own layer, where the agents say it:
+	// the (was …) is stripped, and ZCode's wider match taking the same
+	// label doesn't keep it unstripped
 	req.Messages = append(req.Messages,
-		Message{Role: "user", Parts: []Part{{Kind: Text, Text: "# Environment\n - Primary working directory: /Users/me/moved (was /Users/me/next)\n"}}})
+		Message{Role: "system", Parts: []Part{{Kind: Text, Text: "# Environment\n - Primary working directory: /Users/me/moved (was /Users/me/next)\n"}}})
 	if got := workDir(req); got != "/Users/me/moved" {
 		t.Errorf("dash-led with a was: %q", got)
 	}
