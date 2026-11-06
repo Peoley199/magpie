@@ -23,7 +23,7 @@
 | --- | --- |
 | ~~`internal/gateway/claude_room.go` 的 `dir := path.Clean`~~ **已退役（11-05）**：上游 #4113 采纳了同一修复且是超集，fork 的 `1805cad0` 已放弃，该文件与上游逐字节相同 | memLimit 的 cgroup 路径是 Unix 路径，Windows 上 `filepath` 会死循环 |
 | `internal/gateway/anthropic_shapes.go` 里的 `zcodeStartPlan` / `withoutZCodeSystem` / `systemTextOf` | ZCode Start Plan（无 GLM key 的 zcode 插件账号）拒绝一切带 system 的请求（405/3012），发前摘除并把文本挪进首条用户消息。11-05 起用 `systemTextOf`：上游新测试声明了同名 helper，fork 的函数让名（见 11-05 节） |
-| `internal/gateway/workdir.go` 里的 `zcodeWorkDir` | ZCode 的 `- Primary working directory:` 行与 Claude Code 的 ` - ` 行区分 |
+| `internal/gateway/workdir.go` 里的 `zcodeWorkDir` | ZCode 的 `- Primary working directory:` 行与 Claude Code 的 ` - ` 行区分。11-06 起它同时出现在 `callerForms` 与 `turnForms`（`<system-reminder>` 作用域里），因为上游 #4940 把读法分成了两层（见 11-06 节） |
 | `internal/gateway/gateway.go` forwardOnce 里 `if to == provider.Anthropic && zcodeStartPlan(p)` | 上述摘除的调用点（在 `fitUserBetas` 之后） |
 | 测试：`internal/gateway/zcode_start_system_test.go`、`testdata/workdir/zcode-3.16.3.json`、`workdir_test.go` 的 ZCode 用例 | fork 自有，上游没有 |
 
@@ -150,6 +150,40 @@ internal/gateway），并在纯上游树上逐一复现（20/20 红）。归类�
 
 转绿：`TestCodexModelEffortLetsUnrelatedCallsGo`、`TestLibraryMCPHub`、
 `TestSettingsSaveKeepsWhatItDoesNotSend`（上游修了它的 fixture）——都属负载/状态相关，不是新问题。
+
+### 11-06（v0.1.3005→v0.1.3079，**110 提交**；16 包 84 红，0 回归）
+
+合并冲突第一次真实发生：`internal/gateway/workdir.go`。上游 #4940（`db9d6a610`）把工作目录读法
+拆成两层——调用方自己那层（系统提示 + `{role:"system"}` 消息）整段读，对话里的轮次只读调用方
+声明过的形式（`<cwd>`/`<env>`/Claude Code 的 `<system-reminder>`），用户消息里**引用**的
+`Primary working directory:` 不再算数；fork 侧则在 `workPlace` 里读 ToolResult 部件、并用
+`zcodeWorkDir` 在行内任意位置匹配 ZCode 的标签。解法是两头都取：用上游的两层 forms
+（`callerForms`/`turnForms`），把 `zcodeWorkDir` 加进 callerForms，并加进 turnForms 的
+`<system-reminder>` 作用域；部件循环保留 `ToolResult`。原来靠"` - ` 开头就跳过"实现的
+"(was …)"剥离改由 `dirForm.was` 承担，reminder 作用域里同样剥。
+
+第二个 blind spot 记在这：指纹守护只查函数名 `zcodeWorkDir` 在不在上游，看不出它的**语义**
+这次被重新安放（放进两层 forms 的具体哪几项），这只能靠人读。
+
+基线对照（`fork-suite-compare.sh`，基线 = 上次合并的第一个父 `0d06f72e8`）：82 个预存红签
+名一致、0 个签名变化、3 个"仅合并头红"。这 3 个全部在**纯上游 `84ad780b6` 树上同时复现**
+（`go test ./internal/agent -run '^TestHowInstalledWindowsShim$'` 等同样红，断言值完全相同），
+与 fork 无关：
+
+| 测试 | 包 | 现象 |
+| --- | --- | --- |
+| `TestHowInstalledWindowsShim` | agent | 断言 npm 安装命令的形态，Windows 上 npm.cmd 的实际形态与断言不同 |
+| `TestMiseShimWindowsFiveAgents` | agent | 同类，mise 的 node prefix 路径断言 |
+| `TestPluginAgentMissingSaysSo` | gui | 断言 `~\.config\magpie-kimi`，上游新 fixture 在 Windows 上写法不同 |
+
+另外 `TestMaskedRecordKeepsSentAndBack`（上两轮的红）本轮转绿，属测试间状态相关。
+
+**推送通道**：本轮 `git push origin main` 走默认 ssh 通道一次成功（fetch 同样正常），没有触发
+11-05 记的 443 备用通道；那条备用命令仍然留在 `~/.ssh/config` 注释里，22 端口被重置时用它。
+
+**构建与安装**：桌面版按 §七 那组命令重建（`v0.1.3079-28-gf2ab8d842`，81,948,672 字节），
+应用当时在跑，用改名法装上 `D:\magpie`，旧版留档
+`.bak-v0.1.3005-27-g0d06f72e8`（v0.1.3005-27 是上一轮装进去的版本）。
 
 **推送通道**：22 端口直连 github.com 被重置（连接重置），改走
 `ssh://git@ssh.github.com:443/…` + `ProxyCommand=connect -H 127.0.0.1:7897`。备用命令已记在
