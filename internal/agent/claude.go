@@ -429,10 +429,14 @@ func claudeCapabilities(first []string, own, desktop bool) string {
 	}
 	if desktop {
 		shown, _ := provider.CatalogFor("claude-desktop")
+		again := gateway.DesktopTierAliases()
 		for _, e := range shown {
-			// one named as a Claude model Claude Code knows on its own
-			if id := gateway.DesktopID(e); claudeName(id) == "" {
-				add(id, e.Efforts)
+			// one named as a Claude model Claude Code knows on its own;
+			// a model picked for two tiers is listed for the second too
+			for _, id := range append([]string{gateway.DesktopID(e)}, again[e.ID]...) {
+				if claudeName(id) == "" {
+					add(id, e.Efforts)
+				}
 			}
 		}
 	}
@@ -1251,9 +1255,12 @@ func claudeIn(at place) *Agent {
 		if desktopOn() {
 			shown, _ := provider.CatalogFor("claude-desktop")
 			behaves, _ := gateway.DesktopBehavesAs()
+			again := gateway.DesktopTierAliases()
 			for _, e := range shown {
-				if id := gateway.DesktopID(e); claudeName(id) == "" {
-					models = append(models, claudeBudget{id: id, window: e.Context, long: gateway.DesktopListed1M(e), compact: work(e.ID), behaves: behaves[id] != ""})
+				for _, id := range append([]string{gateway.DesktopID(e)}, again[e.ID]...) {
+					if claudeName(id) == "" {
+						models = append(models, claudeBudget{id: id, window: e.Context, long: gateway.DesktopListed1M(e), compact: work(e.ID), behaves: behaves[id] != ""})
+					}
 				}
 			}
 		}
@@ -2852,7 +2859,12 @@ func StandIn(agent, model string) string {
 		// a Codex in a WSL distro is known by the same client
 		return wslCodexStandIn()
 	}
-	if m := claudeStandIn(filepath.Join(here(home).claudeDir(), "settings.json"), model); m != "" || runtime.GOOS != "windows" {
+	if m := claudeStandIn(filepath.Join(here(home).claudeDir(), "settings.json"), model); m != "" {
+		return m
+	}
+	// a claude-magpie session, its settings.json not on magpie, is on
+	// the launch file's models (claude_launch.go)
+	if m := claudeLaunchStandIn(model); m != "" || runtime.GOOS != "windows" {
 		return m
 	}
 	// a Claude Code in WSL is known by the same User-Agent

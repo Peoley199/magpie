@@ -542,6 +542,13 @@ id to avoid a 403. Embeddings, rerank and speech-to-text requests use the remote
 APIs, and its exposed retrieval models are kept when fetching its list.
 These remain in agent model lists as on the remote; being listed does not
 mean an embedding or rerank model can hold a conversation.
+When the shared magpie's computer comes back at another address on the same
+network (a router handing it a new IP after a restart), the other computers
+find it by themselves: one that can't connect looks on its own networks for
+the magpie that answers its key, saves the new address and goes on. This
+needs an IP address on a private network; a name (`a-pc.local`) or a
+Tailscale address is followed as it is. Over the internet, use Tailscale's
+stable address or name, or a public URL in front of the shared magpie.
 The remote must serve the requested API and model, and allow the supplied
 key to use them. Responses uses HTTP, including SSE, rather than WebSocket.
 An older remote without decision-model discovery still serves its existing
@@ -551,8 +558,10 @@ shared magpie's cards named with it (`Codex · office`, id `office/codex`), as
 that magpie last read them — only the computer holding the sign-ins asks the
 vendors, and it answers from what it has kept (`GET /v1/magpie/quotas/cards`).
 A card's refresh here has it read that card once more
-(`POST /v1/magpie/quotas/refresh`, at most once in 30 seconds a card); until it
-has read anything, the remote's one card says so. Their history is shown with
+(`POST /v1/magpie/quotas/refresh`, at most once in 30 seconds a card); the
+remote's own card has it read every card, each saved Claude account's
+`/usage` too, as its Usage page's Refresh does, and is waited for up to 25
+seconds (#5443). Until it has read anything, the remote's one card says so. Their history is shown with
 its own. A check-in is pressed on that computer, not here. A Codex card's
 reset can be used from here (#3850): **Use one…** asks first, as for this
 computer's accounts, and that magpie spends it on its account
@@ -647,6 +656,7 @@ magpie gateway-key limit <id> list     # each limit, used, left and reset
 magpie gateway-key limit <id> 10d --tokens 5m   # every 10 days, from now
 magpie gateway-key limit <id> 5h --tokens 200k  # every 5 hours, from now
 magpie gateway-key limit <id> add week --cost 20   # one more limit; all must pass
+magpie gateway-key limit <id> add month --cost 20 --model openai/*   # a limit of only OpenAI's models
 magpie gateway-key limit <id> remove 2 # take off the 2nd limit
 magpie gateway-key limit <id> reset    # count its usage from 0 again (reset 2: only the 2nd)
 magpie gateway-key limit <id> off      # no limit
@@ -654,6 +664,8 @@ magpie gateway-key models <id> openai/gpt-5 anthropic/*   # only these models
 magpie gateway-key models <id> all     # every model
 magpie gateway-key accounts <id> codex/me@example.com   # only these accounts
 magpie gateway-key accounts <id> all    # every account
+magpie gateway-key mcp <id> github fs/read_file   # only these MCP servers and tools
+magpie gateway-key mcp <id> none        # no MCP server (all: every one)
 magpie gateway-key quotas <id> on      # told the quotas of what it may use
 ```
 
@@ -711,6 +723,25 @@ Usage page this way (#1547). Requests from
 this computer that send no gateway key are not limited; a gateway key used
 from this computer is.
 
+A limit can count **only some models** (zola_xynb on X): pick them under
+**Models** in the limit's editor, or `--model` (again, or a comma list) on
+`magpie gateway-key limit`, as `<provider>/<model>` or `<provider>/*`, such
+as $20 a month on `openai/*` beside $50 a month on the whole key. Such a
+limit counts only the calls those models answered, by the provider and
+model in the usage log. Once it is spent, a request naming one of them is
+refused with the same 429 (it names the models, and sets no
+`X-Magpie-Limit-Reset`, so a magpie using this one as a remote rests only
+the model), and a routing group, a model's fallbacks, `count_tokens`,
+embeddings, images, videos, the decision groups and magpie's own calls for
+the key leave its models out and go on to the others, from the next
+request on, midway through a conversation too. Its spent models stay in
+the key's model lists. A limit without models is the whole key's, as every
+limit before this was; two limits of the same window can share it only
+when they count different models. A request through a group holds no
+reservation in a model's limit, so requests sent at once through groups
+can go over it by about a call each. A magpie from before this reads such
+a limit, if it is a key's first, as the whole key's.
+
 A key's holder can also open **`/me`** in a browser at the address they
 reach the gateway at (for example `http://192.168.1.10:3999/me`), type
 their key, and see its own limits, its usage over today, 7 and 30 days, the
@@ -746,6 +777,25 @@ lists, but the key may ask one itself, at `/v1/systemone` or in another
 magpie's list of decision models, only when it names it (or its
 `<provider>/*`). The menu lists the decision models after their provider's
 chat models, each marked as one (Kautism on Discord).
+
+A gateway key can also be held to some **MCP servers and tools** (wakaka
+on Discord): pick them under **MCP servers** in the key row's ⋯ menu (a
+key held to some then shows a badge that opens the same list), or run
+`magpie gateway-key mcp <id> github fs/read_file` (`all` takes the
+restriction off, `none` gives the key no MCP server). An entry is a
+server's name, every tool of it, or `<server>/<tool>`, that tool alone; the
+servers are the Library's (by their names there) and magpie's own:
+`magpie-web-search`, `magpie-vision`, `magpie-image`, `magpie-browser` and
+`magpie-tools`. Every route that reaches a server holds the key to it: the
+MCP hub lists only the servers and tools the key may use and refuses a
+call of any other; `/mcp/<name>` and `/mcp/run/<name>` answer 403 for a
+server the key may not use, leave the tools it may not use out of
+`tools/list` and refuse a `tools/call` of one; magpie's own servers do the
+same, and `/v1/magpie/mcp` lists only those the key may use. A key issued
+under a held key is held to its issuer's list too. `GET /v1/magpie/limit`
+tells a held key its list as `mcp`. A model's own web search, which magpie
+serves through its search when the provider has none, is not an MCP call
+and is not held by this list.
 
 A gateway key can also be held to some **accounts** (#905): the accounts
 and keys its requests may use, picked in the same menu right after their
@@ -946,6 +996,48 @@ default, `us-east-1`, `eu-central-1`, `ap-northeast-1`, `cn-hongkong` and
 `sk-sp-` keys), with the plan's documented text models. Both serve Chat
 Completions at `/compatible-mode/v1` and Anthropic Messages at
 `/apps/anthropic`.
+
+### Embeddings and rerank
+
+The gateway serves two retrieval APIs beside chat, at `/v1/embeddings` and
+`/v1/rerank` (also without `/v1`). Both take the gateway's key, as chat does,
+and the model is named as `/v1/models` names one, `provider/model` or the
+bare id.
+
+- `/v1/embeddings` takes OpenAI's body: `model`, `input` (a string or a
+  list), and whatever else the vendor takes (`dimensions`,
+  `encoding_format`; Voyage's `input_type`, `output_dimension`,
+  `output_dtype`, `truncation`).
+- `/v1/rerank` takes the body Cohere, Jina and Voyage share: `model`,
+  `query`, `documents` (a list of strings), and `top_n` (Cohere, Jina) or
+  `top_k` (Voyage), `return_documents`. The answer is the vendor's, its
+  results in `results` (Cohere, Jina) or `data` (Voyage), each an `index`
+  into `documents` with its `relevance_score`.
+
+The body goes to the provider's `<base>/embeddings` or `<base>/rerank` as
+sent, with only `model` changed to the vendor's name for it, and the answer
+comes back as the vendor gave it, a refusal with its status and words. The
+tokens counted are its `usage.total_tokens`. A model is asked only on its own
+API's route: an embedding model named on `/v1/rerank`, or a reranker on
+`/v1/embeddings`, is a 404, and neither is in the models agents are offered.
+A model several providers serve under one id is a routing group of its kind
+made per request (see Routing groups).
+
+Voyage AI (`voyage`, heatonz on Discord) is a preset of only these: an
+API key from dashboard.voyageai.com, at `https://api.voyageai.com/v1`. It has
+no list of models to fetch, so the preset names them: the embedding models
+`voyage-4-large`, `voyage-4`, `voyage-4-lite`, `voyage-code-4`,
+`voyage-finance-2`, `voyage-law-2`, `voyage-3-large`, `voyage-3.5`,
+`voyage-3.5-lite`, `voyage-code-3` and `voyage-code-2`, and the rerankers
+`rerank-3`, `rerank-3-lite`, `rerank-2.5` and `rerank-2.5-lite`. Its Test asks
+`voyage-4-large` for one embedding. Its contextualized
+(`/v1/contextualizedembeddings`) and multimodal (`/v1/multimodalembeddings`)
+embeddings have no route here.
+
+```sh
+curl localhost:3425/v1/rerank -H "Authorization: Bearer $MAGPIE_KEY" \
+  -d '{"model":"voyage/rerank-3","query":"what eats seeds","documents":["a magpie","a stone"],"top_k":1}'
+```
 
 ### Google Vertex AI
 
@@ -1402,7 +1494,13 @@ A call to a model no price is known for is counted at the price of the model
 the reply said answered, at the same provider, when that one has a price: a
 relay that sells `kimi-k3` as `moonshot-kimi-k3` answers as `kimi-k3`, so its
 calls are counted at `relay-a/kimi-k3`'s price. A model with a price of its
-own, `0` included, keeps it whatever its reply says.
+own, `0` included, keeps it when the reply's name is that model however
+spelled, the vendor's own alias, or a relay's rename. A call the vendor
+genuinely answered with another model — the `swapped` mark `magpie usage
+--csv` and the Requests page show — is counted at the model that answered,
+which is the one the vendor billed for; a price you set for the model you
+asked for, `0` included, still says what that model costs you, and when the
+model that answered has no price the asked-for one's is kept.
 
 `magpie model price provider/model` says where a price came from, and for a
 model with none, the two commands that give it one.
@@ -1428,7 +1526,10 @@ write kept for 5 minutes at 1.25× input and one kept for an hour at 2× input,
 and its usage says which were which (`cache_creation.ephemeral_5m_input_tokens`
 / `ephemeral_1h_input_tokens`, from the API and from Claude Code's
 transcripts). The fourth number is the 5-minute price; the fifth, when not
-given, is 2× input for a Claude model — Anthropic's rule. Any other model has
+given, is 2× input for a Claude model — Anthropic's rule. Copilot bills a
+cache write at one price however long it is kept (its `copilot_usage` counts a
+1-hour write as the `cache_write` a 5-minute one is), so a model on Copilot has
+no 1-hour price unless you give one, Claude's too. Any other model has
 no 1-hour price unless you give one: a 1-hour write it reports is counted at
 the 5-minute price, and neither `magpie model price` nor the app's boxes show
 a 1-hour price for it. A call recorded
@@ -1972,7 +2073,7 @@ provider or group still set to one of them is tried in its listed order.
 Your own routing groups are the built-in plugin `groups` (Routing groups in
 Plugins › Built-in), which stays on while you have one. The groups magpie
 finds for a model two providers serve don't need it. Turned off, the gateway
-doesn't list or serve a group of your own, and the Routing page has no New
+doesn't list or serve a group of your own, and the Routing groups page has no New
 group button; `magpie groups` still lists them.
 
 **Make first** sets the accounts' order. How much that order counts
@@ -3138,6 +3239,26 @@ does the same in a terminal: open the link it prints, then paste the address
 the browser ended on. Keys, sign-ins and plugins live in the volume, so a
 restart, or a new container on the same volume, keeps them.
 
+Magpie Browser's extension can't be loaded from the container's folders, so
+in the browser UI the Library's Magpie Browser sheet offers *Download the
+extension*: a zip pointed at the page's own address (3430 hands the
+gateway's routes on), with a gateway key named **Magpie Browser** of its
+own, made once and reused while it is on. Unzip it and choose the folder
+with Load unpacked on `chrome://extensions`. An extension already loaded
+takes the address and a gateway key in its popup. The Magpie Browser key
+connects the extension and nothing else: it reaches no model, MCP server
+or stats, so a copy of the zip left in Downloads spends nothing. A key a
+magpie from before made for the zip with full access is held so the next
+time the gateway starts. A browser is the container's own only when it
+connects from the container's own computer; the host's Chrome reaches the
+container from the bridge (172.17.0.1), so it is the key's alone, and the
+container's agents don't use it yet (#5529). To use it from the host, give
+the caller of `/mcp/magpie/browser` a key of its own with full access and
+connect the extension with that key. A browser that connects with another
+key is that key's alone. A browser connecting from outside with no key, or
+from a web page's origin, is refused as before. A keyed browser is let go
+once its key is turned off, removed or rotated.
+
 The image has a `HEALTHCHECK`: `magpie healthcheck` exits 0 while the gateway
 answers on `MAGPIE_ADDR`, under `serve` and `web` alike, so `docker ps` shows
 the container as healthy (Compose: `depends_on: condition: service_healthy`)
@@ -3154,8 +3275,10 @@ key. See [Connecting anything else](#connecting-anything-else) for the
 protocol-specific base URLs. Keep `3425` behind a firewall or VPN and do not
 expose it publicly without gateway-key authentication.
 
-Such a page is in **gateway mode**: it shows Providers, Gateway, Routing,
-Usage, Sessions, Plugins and Settings, with no Agents or Library tab.
+Such a page is in **gateway mode**: it shows Sessions, Library, Providers,
+Routing, Gateway, Usage, Masking, Plugins and Settings, with no Agents tab.
+The Library has its MCP servers alone, with the MCP router: other
+computers' apps connect at the router's address with a gateway key.
 Sessions lists only the sessions of other computers' agents that came
 through this gateway, never this machine's agents' session files
 ([gateway sessions](subsystems/gateway-sessions.md)). Settings leaves out what is written into this machine's agents (provider in
@@ -3202,6 +3325,13 @@ bind it only to the NAS interface or VPN address) and recreate the
 container. For Internet access, prefer a
 VPN such as Tailscale or WireGuard; a reverse proxy or tunnel forwarding to
 Magpie over loopback needs a gateway key from its clients, as the network does.
+
+The image's tags: `latest` is the newest release, and magpie releases
+several times a day. `daily` is the newest release as of 20:00 UTC, moved
+once a day (`.github/workflows/docker-daily.yml`), for Renovate or
+Watchtower to update at most daily (with Renovate, pin its digest);
+`stable` is the desktop app's Stable channel, one a week. `0.1.N` is one
+release, `0.1` the newest of its line, and `edge` every change on `main`.
 
 ### Developing
 

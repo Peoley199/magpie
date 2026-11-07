@@ -130,10 +130,15 @@ type Route struct {
 	// pairs Status with it, not with the last try's own Fail (danzi002 on
 	// Discord: an earlier account's 529 server_is_overloaded read
 	// "529 · quota used up" beside the last account's usage limit)
-	Fail   string `json:"fail,omitempty"`
-	Millis int64  `json:"ms,omitempty"`
-	Tokens int    `json:"tokens,omitempty"`
-	Output int    `json:"out,omitempty"` // of Tokens, the reply's
+	Fail string `json:"fail,omitempty"`
+	// Canceled: the agent canceled the request before it was answered
+	// (usage.CanceledBy). Its agent saw no error, so it isn't one of
+	// the errors the page counts. Set as it is done, and as a day's
+	// history is read, for a route kept before it was
+	Canceled bool  `json:"canceled,omitempty"`
+	Millis   int64 `json:"ms,omitempty"`
+	Tokens   int   `json:"tokens,omitempty"`
+	Output   int   `json:"out,omitempty"` // of Tokens, the reply's
 	// Reasoning: of Output, the reply's reasoning, which its speed leaves
 	// out (usage.DecodeOf)
 	Reasoning int `json:"reasoning,omitempty"`
@@ -184,6 +189,12 @@ type Route struct {
 	// Conv: the conversation a request without a session id is part of,
 	// as a digest of its first user turn (conversationID)
 	Conv string `json:"conv,omitempty"`
+	// ResponseID: the id of the reply object actually released to the
+	// client, as the client read it, set when the route is done. The agent
+	// stores that id with the reply (dsh's replay state), so a request
+	// whose agent keeps it can be found again after the fact even when its
+	// conversation opening is one a fork copied (dshConvs)
+	ResponseID string `json:"responseId,omitempty"`
 	// Folder: the last two levels of the folder its agent says it works
 	// in (shortFolder), never the whole path; a request that says none
 	// takes its session's, as said last (#1068)
@@ -341,6 +352,9 @@ type Weighed struct {
 	Speaks   provider.Protocol `json:"speaks,omitempty"`   // a key made for one protocol only
 	Rest     *Rest             `json:"rest,omitempty"`     // resting after a failure, when the request came
 	Unlisted bool              `json:"unlisted,omitempty"`
+	// UseFirst: its provider is set to be used first, which Smart puts
+	// ahead of the other providers' (provider.Provider.UseFirst)
+	UseFirst bool `json:"useFirst,omitempty"`
 	// Window: left out as the request is longer than this, its model's
 	// context window (roomy), unless every one with room is out of its
 	// allowance (#3749)
@@ -550,7 +564,7 @@ type planned struct {
 
 func weighed(c candidate, p provider.Provider, wg weighing, fallback bool, from provider.Protocol) Weighed {
 	w := Weighed{ID: c.rest, Provider: p.ID, Name: p.Name, Icon: p.Icon, Preset: p.Preset, Model: c.model, Fixed: c.effort, Fast: c.fast,
-		Routing: p.Routing, Fallback: fallback, Shared: c.rest != p.ID, Rank: c.rank, NoURL: c.noURL, Reserve: c.reserve}
+		Routing: p.Routing, Fallback: fallback, Shared: c.rest != p.ID, Rank: c.rank, NoURL: c.noURL, Reserve: c.reserve, UseFirst: c.p.UseFirst}
 	switch {
 	case c.p.Account != nil:
 		w.Kind, w.Who, w.Agent, w.Plan = "account", c.p.Account.User, c.p.Account.Agent, c.p.Account.Plan
@@ -866,7 +880,8 @@ func (t *trace) update(r *Route, f func(r *Route)) {
 				t.totals.Rerouted++
 			}
 		}
-		if r.Status >= 400 || r.Error != "" {
+		r.Canceled = usage.CanceledBy(r.Status, r.Error)
+		if (r.Status >= 400 || r.Error != "") && !r.Canceled {
 			t.totals.Errors++
 		}
 		t.turns.end(r, turnFinal(r), time.Now())

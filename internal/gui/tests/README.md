@@ -1,5 +1,13 @@
 # Dropdown browser regression
 
+`agent-details-ready.test.cjs` holds the first settings read and the lazy
+Long conversations module on the main window's Agents → Details path. It
+checks a complete first and warm opening without a final height jump in all
+five languages, wide and narrow, Chromium and WebKit. It also covers Claude
+Code and Grok Build, failed-read retry, a superseding agent click, navigation
+away and reduced motion. `MAGPIE_ASSETS` selects older assets for the failing
+regression comparison; `ARTIFACT_DIR` retains Chinese desktop screenshots.
+
 `modal-backdrop.test.cjs` checks the modal's computed backdrop filter using
 the real stylesheet and platform marker: Windows desktop windows and panels
 keep the dimming veil without filtering, while browser pages, macOS and Linux
@@ -638,22 +646,31 @@ model's name (#968): a new group named "GPT 6.1 Sol" is said and sent as
 `group/gpt-6.1-sol`, and `groupSlug` folds a run of dots and trims them at the
 ends as `provider.GroupSlug` does, in English and Chinese, Chromium and WebKit.
 
-`group-new-head.test.cjs` checks that a routing group of any models can be
-made from the top of the Routing page, in Chromium and WebKit, English and
+`group-new-head.test.cjs` checks that a routing group of any models is made
+from the Routing groups page's toolbar, in Chromium and WebKit, English and
 Chinese (mintonight, #944: the groups' New group sat below the requests, so
-only found groups were used). The page's head has New group with a plus and a
-tooltip saying what a group is, in sight while the groups are below the fold;
-its click opens an empty group's editor, brings it into view and focuses its
-name. The groups' own New group has the plus too. No left-border accent.
+only found groups were used). New group is in sight on arrival, with a plus
+and a tooltip saying what a group is; its click opens an empty group's
+editor, brings it into view and focuses its name, and a draft is replaced
+only after Discard. No left-border accent.
+
+`routing-groups-page.test.cjs` checks that routing groups have a page of
+their own, after Routing in the sidebar: its toolbar holds the filter, how
+many groups there are and how many are on, Import, Select and New group as
+the one filled button, in sight on arrival; the list follows, then Settings
+(found groups, the names in agents' lists). The Routing page has no groups
+and no jump to them. A request's group opens the groups page on its row, and
+`?view=groups&newgroup=` opens a new group there. Every language, Chromium
+and WebKit, at 1280px, 640px and 420px, with no sideways scroll.
 
 `name-suffix-where-named.test.cjs` checks the setting that says whether a
 provider's name or "· routing group" follows a name in the agents' lists (#868)
 where names are given, in Chromium and WebKit, English and Chinese. The
 provider editor's Names, prices & levels has its three choices and says what the lists
-show. For the groups it is one setting for all of them, so it sits over the
-groups on Routing (PAMI on Discord: in one group's editor it read as that
-group's): a group's editor has no choices, only what its group will be called
-and that it is set above; a pick there posts settings/plain-names once and the
+show. For the groups it is one setting for all of them, so it sits under the
+list on the Routing groups page (PAMI on Discord: in one group's editor it read
+as that group's): a group's editor has no choices, only what its group will be
+called and that it is set under the list; a pick there posts settings/plain-names once and the
 open editor's line follows it with its unsaved name. No click scrolls, nothing
 native, no left border, and every string has its Chinese, Japanese and German.
 
@@ -705,13 +722,6 @@ without the provider" (love1sbug on X): off by default, On posts
 back, neither click scrolls the page, the row is drawn in gateway mode, and
 nothing runs out of the row or the page sideways at 420px and 900px. Every
 language, Chromium and WebKit.
-
-`routing-steady.test.cjs` scrolls the Routing page down to its routing groups,
-opens one in its editor and types into its name, then streams six requests in
-from the trace (new agents and accounts on the stage, failures and retries in
-the story, the lists growing): the groups and the editor stay where they are
-on the screen on every layout and scroll, the view's scrollTop moving by just
-what grew above them, and the field keeps its focus and what was typed.
 
 `routing-flood.test.cjs` takes the Routing page out of sight three ways
 (#302): the window hidden, the window covered and drawing no frames
@@ -1250,6 +1260,15 @@ the error that ended it, and says in its details that the file records no
 status; its models are the one asked for, the one sent as asked and the one that answered, its effort is there, and its time is about (≈) what the file's stamps tell. A click opens and closes a row without moving the page, Enter and Space
 do the same, text selected in the details is not a click, and the rows stay open
 when the list is asked for again; in English and Chinese.
+
+`usage-ledger-bytes.test.cjs` checks that Requests says what a request sent
+up and got back (faithleysath): a row's details name "Sent upstream",
+"Received" and what DeepSeek's image files saved (#5407), a row from before
+they were kept shows none of them, and a saving below 0 shows none. Under
+the Requests card the period reads "↑ up · ↓ down" with the saving beside
+it, and nothing for a period with no bytes. At 1180 and 420 wide nothing
+scrolls sideways; Chromium and WebKit, every language. The old page.js
+shows it failing.
 
 `ledger-cache-tokens.test.cjs` (#1839) opens a request's details and finds its
 tokens there at every width: in, out, cache read and cache creation, 0 said as
@@ -1960,9 +1979,9 @@ groups" (只通过路由分组使用; 悠悠哥 on Discord: hy4 vanished from th
 The model picker's filter, finding such a model, says why it isn't offered:
 hy3, in the group Mine, is reached by picking Mine ("Pick Mine" sets it);
 hy4, in no group, can't be used, and "Make a routing group of it" opens the
-Routing page on a new group of it, added with `members: ["hunyuan/hy4"]`.
+Routing groups page on a new group of it, added with `members: ["hunyuan/hy4"]`.
 The provider's editor names its models in no group under the tick (not once
-unticked), each a click from a group; `?view=routing&newgroup=` opens the
+unticked), each a click from a group; `?view=groups&newgroup=` opens the
 window on one, and the tray panel asks `window/main` for it. The page doesn't
 move, no left-border accent; English and Chinese, Chromium and WebKit.
 

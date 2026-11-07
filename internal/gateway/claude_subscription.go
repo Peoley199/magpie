@@ -2655,6 +2655,73 @@ func (b *subscriptionBridge) branch(req *Request, owner string) *savedSession {
 	return nil
 }
 
+// retryBranch is where a turn sent again while its run is busy answering
+// it goes on from a copy of the run's session, cut before the turn
+// (#5405): the client's connection dropped mid-reply, its request was
+// retried, and no cancel reached magpie — the run the first attempt
+// started is still busy with the very turn, and its answer would reach no
+// one. A new Claude Code told the whole conversation writes it all to the
+// cache again, only its own system prompt and tools read from it; the
+// copy is the conversation as Claude Code asked it of Anthropic, whose
+// cache has it, so the retry's own run reads the history from the cache
+// and is told only the turn, as a turn after an unshelve is. nil when no
+// busy run of the owner is answering this very turn (the request it heard
+// is this one, message for message), or the copy can't be
+// made: a client's own cache marks, a session taken back or being taken
+// back (rewound, rewinding), a run started for the turn (its session has
+// no line or reply from before it to cut at), or no session on disk.
+func (b *subscriptionBridge) retryBranch(req *Request, owner string) *savedSession {
+	if req.clientCache != nil {
+		return nil
+	}
+	key, since := nextTurn(req, owner)
+	if key == "" {
+		return nil
+	}
+	keys, want := conversationKeys(owner, req.Messages), historyKey(req.Messages)
+	b.mu.Lock()
+	runs := make([]*subscriptionRun, 0, len(b.runs))
+	for _, run := range b.runs {
+		if run.owned() != owner || run.idleKey != "" || run.convKey == "" || !slices.Contains(keys, run.convKey) {
+			continue
+		}
+		runs = append(runs, run)
+	}
+	b.mu.Unlock()
+	var found *savedSession
+	var at time.Time
+	for _, run := range runs {
+		run.mu.Lock()
+		// the very turn, not one that goes on from it (follows): a turn
+		// whose reply the client has is no retry of it
+		busy := !run.closed && run.rewinding == nil && !run.rewound && run.lean == req.leanPrompt &&
+			!run.clientMarks && (run.tui || !wantTUI(req)) && run.told == want
+		sid, sessions, backLine, backMsg, appended, tui := run.sessionID, slices.Clone(run.sessions), run.backLine, run.backMsg, run.appended, run.tui
+		started := run.started
+		run.mu.Unlock()
+		if !busy || sid == "" || backLine == "" && backMsg == "" || len(sessions) == 0 {
+			continue
+		}
+		if found != nil && !started.After(at) {
+			continue
+		}
+		cut, err := cutReply(sessions, sid, backLine, backMsg)
+		if err != nil {
+			log.Printf("claude: the busy run's session couldn't be cut before the turn sent again (%v)", err)
+			continue
+		}
+		if found != nil {
+			found.discard() // a newer run's copy is taken: the older one's goes
+		}
+		found, at = &savedSession{session: cut, sessions: sessions, owner: owner, at: time.Now(), since: since, tui: tui, appended: appended}, started
+	}
+	if found == nil {
+		return nil
+	}
+	log.Printf("claude: a turn sent again while its run is busy answering it goes on in a branch of its session, cut before the turn")
+	return found
+}
+
 // replyBegun notes a reply message as it begins: its lines in the session
 // come later (lastMsg).
 func (r *subscriptionRun) replyBegun(msg string) {
@@ -3512,7 +3579,8 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 	var refusedDetails []byte // its stop_details, told only if it stands
 	replyModel := ""          // the model the reply began with
 	// what the messages before cost, as each message's usage counts only
-	// itself and the client keeps the last it is told
+	// itself and the client keeps the last it is told: their output is
+	// told with this one's, their prompt billed only (after)
 	var before, this Usage
 	var lateUsage cliUsage    // a message left out as told by its call (onCall)
 	var reqID, errKind string // the last request's id, and how it failed
@@ -3647,7 +3715,10 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 			before, this = before.plus(this, false), Usage{}
 			// Claude Code's fallback model answering: a reply told
 			// whole names it; a stream named its model as it began
+			// its prompt is the reply's, the messages before billed as
+			// its Deferred (after)
 			v := usage(u)
+			v.restart = true
 			if model == replyModel {
 				model = ""
 			}
@@ -3806,6 +3877,7 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 					Type             string          `json:"type"`
 					Text             string          `json:"text"`
 					Thinking         string          `json:"thinking"`
+					EstimatedTokens  *int            `json:"estimated_tokens"`
 					Signature        string          `json:"signature"`
 					PartialJSON      string          `json:"partial_json"`
 					StopReason       string          `json:"stop_reason"`
@@ -4117,7 +4189,7 @@ func (r *subscriptionRun) readOutput(rd io.Reader) {
 			case "text_delta":
 				said(e.Delta.Text)
 			case "thinking_delta":
-				r.emit(Event{Kind: KThink, Text: e.Delta.Thinking})
+				r.emit(Event{Kind: KThink, Text: e.Delta.Thinking, Estimated: e.Delta.EstimatedTokens})
 			case "signature_delta":
 				r.emit(Event{Kind: KSig, Name: sealAnthropic, Text: e.Delta.Signature})
 			case "input_json_delta":
@@ -4205,8 +4277,6 @@ type cliUsage struct {
 	} `json:"output_tokens_details"`
 }
 
-// plus adds v's counts to u's; only to those u has, when it only updates
-// what the client was told.
 // claudeLimits are the allowance windows a rate_limit_event's info tells:
 // each of its unifiedWindows, and the one it is about, when that says how
 // much is used or that it turned the request away.
@@ -4241,14 +4311,48 @@ func claudeLimits(raw json.RawMessage) []provider.ClaudeLimit {
 }
 
 // carryUpdate keeps this message's known 1h writes when a partial split
-// reports only 5m counts, then adds usage from earlier messages.
+// reports only 5m counts, then adds usage from earlier messages
+// (after).
 func (u Usage) carryUpdate(this, before Usage) Usage {
 	if u.CacheWrite1h == 0 && u.cacheCreationHasCounts {
 		u.CacheWrite1h = this.CacheWrite1h
 	}
-	return u.plus(before, true)
+	return u.after(before, true)
 }
 
+// after is u, the usage of the request answering now, as told the
+// client of a reply that earlier requests began (before): another try,
+// the message after Claude Code's own tool call, a search round. What
+// they wrote out was streamed to the client as it came, so their output
+// and reasoning are added to this one's. Their prompt (input, cache
+// reads and writes) is billed as the reply's Deferred and never told as
+// its own: a client reads the last reply's prompt back as how full its
+// conversation is, and each later request re-sent what the earlier one
+// had, so a reply told the sum read twice its size and Claude Code
+// compacted early (sleepy_shibe on Discord; WorkBuddy, #5115). update
+// is whether u only updates what the client was told (a message_delta),
+// so only the counts it has are added to.
+func (u Usage) after(before Usage, update bool) Usage {
+	b := before.billed()
+	u = u.plus(Usage{Output: b.Output, Reasoning: b.Reasoning}, update)
+	if b.Input+b.CacheRead+b.CacheWrite+b.CacheWrite1h == 0 {
+		return u
+	}
+	d := Usage{Input: b.Input, CacheRead: b.CacheRead, CacheWrite: b.CacheWrite, CacheWrite1h: b.CacheWrite1h}
+	if own := u.Deferred; own != nil {
+		d.Input += own.Input
+		d.Output += own.Output
+		d.CacheRead += own.CacheRead
+		d.CacheWrite += own.CacheWrite
+		d.CacheWrite1h += own.CacheWrite1h
+		d.Reasoning += own.Reasoning
+	}
+	u.Deferred = &d
+	return u
+}
+
+// plus adds v's counts to u's; only to those u has, when it only updates
+// what the client was told.
 func (u Usage) plus(v Usage, only bool) Usage {
 	if only && u.CacheWrite > 0 && !u.cacheCreationHasCounts && u.CacheWrite1h == 0 {
 		u.cacheCreationReported = false
@@ -5262,6 +5366,14 @@ var (
 	tokenCount = regexp.MustCompile(`^(?:<total_tokens>[^<]*</total_tokens>|Token usage: \S+; \S+ remaining)$`)
 	// reminderTag is a <system-reminder> tag, open or close.
 	reminderTag = regexp.MustCompile(`</?system-reminder(?:\s[^>]*)?>`)
+	// desktopNote is an annotation Claude Desktop (its Claude Code) puts
+	// beside what the run reads, telling it about the picture it scaled
+	// down, where a skill's files live, or that a tool of ToolSearch's
+	// was loaded: the agent's own words about its own work (#5403), never
+	// the user's — the picture itself rides in the tool result. Wide
+	// images read in parallel bring one note each, which may come as one
+	// text joined by blank lines: every note in it is the agent's.
+	desktopNote = regexp.MustCompile(`(?s)^(?:(?:\[Image: original \d+x\d+, displayed at \d+x\d+\. Multiply coordinates by [\d.]+ to map to original image\.\]|Tool loaded\.)\s*)+$|^Base directory for this skill: `)
 )
 
 // midTurnSaid is the user's words in each message they sent mid-turn
@@ -5289,7 +5401,7 @@ func midTurnSaid(text string) []string {
 // token count, or a notice userWords knows (injected).
 func agentNotice(text string) bool {
 	t := strings.TrimSpace(reminderTag.ReplaceAllString(text, ""))
-	if t == "" || hookNotice.MatchString(t) || tokenCount.MatchString(t) {
+	if t == "" || hookNotice.MatchString(t) || tokenCount.MatchString(t) || desktopNote.MatchString(t) {
 		return true
 	}
 	for _, lead := range injected {
@@ -6144,6 +6256,13 @@ func (s *Server) serveClaudeSubscription(w http.ResponseWriter, r *http.Request,
 		from := s.subscription.unshelve(req, owner)
 		if from == nil {
 			from = req.branch
+		}
+		if from == nil {
+			// a turn sent again while its run is still busy answering it
+			// (#5405): the run goes on from a copy of its session, cut
+			// before the turn, and the retry's run reads the history from
+			// the cache, told only the turn
+			from = s.subscription.retryBranch(req, owner)
 		}
 		if from == nil {
 			if why := s.subscription.whyNoRun(req, owner); why != "" {

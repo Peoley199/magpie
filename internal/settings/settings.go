@@ -67,9 +67,11 @@ type Settings struct {
 	// the user records one. This computer's own (KeepOwn): a Mac's Cmd is
 	// another keyboard's Win key, and what is free differs per computer.
 	PanelShortcut string `json:"panelShortcut,omitempty"`
-	// SessionTerminal is the Mac app that opens a resumed session, by bundle
-	// id. "" and "system" follow the .command file association. This
-	// computer's own (KeepOwn): another Mac may not have that app.
+	// SessionTerminal is the terminal that opens a resumed session or an
+	// agent: a Mac app by bundle id, on Windows wt, pwsh or powershell, on
+	// Linux the terminal's program. "" and "system" are the system's (a
+	// Mac's .command file association). This computer's own (KeepOwn):
+	// another computer may not have that terminal.
 	SessionTerminal string `json:"sessionTerminal,omitempty"`
 	// Currency is what a cost — the Usage page's, the tray panel's, the
 	// TUI's and the CLI's — is shown converted to: usd (its native
@@ -418,6 +420,12 @@ type Settings struct {
 	// the vendor's own reply, stop_reason "refusal", which Claude Code
 	// answers by switching to its fallback model itself (DD on Discord).
 	RefusalRetries *int `json:"refusalRetries,omitempty"`
+	// RetryAfterCap is the longest Retry-After, in seconds, an agent is
+	// told (#5371, tlerbao): a plan's quota running out rests its account
+	// until the plan's reset, hours away, and an agent with a fallback
+	// chain of its own waited that long before it moved on. The account
+	// rests as long either way. Unset, the wait goes out as it is.
+	RetryAfterCap *int `json:"retryAfterCap,omitempty"`
 	// NoAccountDiscovery leaves every agent's sign-in unread (#1535,
 	// MaxHaiCom): no credential file, Keychain item or agent CLI is asked
 	// who is signed in, and no subscription is offered; API-key providers
@@ -536,6 +544,12 @@ type Settings struct {
 	// as for a model that can't, and the provider is sent no search tool.
 	// Only while magpie can search for it (gateway.magpieSearches).
 	SearchAll bool `json:"searchAll,omitempty"`
+	// SearchCount is how many pages a client's search is answered with
+	// when it names no count, as Claude Code's WebSearch and Codex's
+	// web_search never do (#5545, mdwsk88): from 1 to SearchCountMost, 0
+	// for SearchCountDefault. A web_search call that names a count (the
+	// web-search MCP server's) is answered with that.
+	SearchCount int `json:"searchCount,omitempty"`
 	// TrayUsages are the subscriptions and plans whose windows are shown
 	// beside the tray icon, in the order shown, each by its provider and
 	// account ("claude|a@b.c"); none when empty.
@@ -1001,7 +1015,8 @@ type ModelPrice struct {
 	CacheWrite *float64 `json:"cache_write,omitempty"`
 	// CacheWrite1h is a 1-hour cache write's price, absent where none is
 	// given: such a write is then counted at 2× input for a Claude model,
-	// else at the 5-minute price (catalog.OneHourFor).
+	// else at the 5-minute price (catalog.OneHourFor), and on Copilot,
+	// which bills an hour's write as a 5-minute one, at the 5-minute price.
 	CacheWrite1h *float64 `json:"cache_write_1h,omitempty"`
 	// Tiers are the prices of a request whose input is over a size, each
 	// whole: "magpie model price … --tier 272k …" (PAMI on Discord).
@@ -1163,14 +1178,21 @@ func (s Settings) ImageWait() time.Duration {
 
 // CodexResetLeadDefault is CodexResetLead's minutes when it is unset, and
 // CodexResetLeadLeast and CodexResetLeadMost the range it can be set in;
-// CodexResetLeads the choices the app and the CLI's words offer.
+// CodexResetLeads the choices the app's menu offers, besides its Custom…
+// (any minutes in range, as the CLI takes). Three minutes is the least
+// (shangyuan0818 on Discord asked for less than 15): the loop wakes at the
+// lead's start, a try is bounded at two minutes (the pass's), and a
+// failed one is tried again a minute after it began, or at once when that
+// is past, so a try hung to its bound still leaves a retry with ~56s before
+// the reset runs out; at two a hung try leaves none. app.js's RESET_LEADS
+// and resetLeadMinutes, and Custom…'s words, say it too.
 const (
 	CodexResetLeadDefault = 30
-	CodexResetLeadLeast   = 15
+	CodexResetLeadLeast   = 3
 	CodexResetLeadMost    = 24 * 60
 )
 
-var CodexResetLeads = []int{15, 30, 60, 120, 180, 360, 720, 1440}
+var CodexResetLeads = []int{3, 5, 10, 15, 30, 60, 120, 180, 360, 720, 1440}
 
 // ResetLead is how long before a Codex reset about to run out unused it
 // is spent by itself: CodexResetLead's minutes, CodexResetLeadDefault's
@@ -1181,6 +1203,24 @@ func (s Settings) ResetLead() time.Duration {
 		m = CodexResetLeadDefault
 	}
 	return time.Duration(m) * time.Minute
+}
+
+// SearchCountDefault is the pages a search is answered with when
+// SearchCount is 0, and SearchCountMost the most it can be set to: Brave
+// and Tavily return no more than 20.
+const (
+	SearchCountDefault = 6
+	SearchCountMost    = 20
+)
+
+// SearchPages is how many pages a search that names no count is answered
+// with: SearchCount, SearchCountDefault when it is 0 (or below), and no
+// more than SearchCountMost when settings.json was written by hand past it.
+func (s Settings) SearchPages() int {
+	if s.SearchCount < 1 {
+		return SearchCountDefault
+	}
+	return min(s.SearchCount, SearchCountMost)
 }
 
 // BusyLoadMost is past the highest BusyLoad: plugin.LoadMost, the most a
@@ -2118,6 +2158,9 @@ func saveOwn(s Settings, recording, reads bool) error {
 	}
 	if s.ClassifyTimeout < 0 || s.ClassifyTimeout > ClassifyTimeoutMost {
 		return fmt.Errorf("a routing group's classifier is given from 1 to %d seconds, or 0 for %d, not %d", ClassifyTimeoutMost, ClassifyTimeoutDefault, s.ClassifyTimeout)
+	}
+	if s.SearchCount < 0 || s.SearchCount > SearchCountMost {
+		return fmt.Errorf("a search is answered with from 1 to %d results, or 0 for %d, not %d", SearchCountMost, SearchCountDefault, s.SearchCount)
 	}
 	if s.BusyLoad < 0 || s.BusyLoad >= BusyLoadMost {
 		return fmt.Errorf("busy models go last over a load from 1 to %d%%, or 0 for off, not %d", BusyLoadMost-1, s.BusyLoad)

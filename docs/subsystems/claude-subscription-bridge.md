@@ -272,10 +272,26 @@ reader (`run.onCall`). Not shown from the transcript within `callFirst`
 it), the call is a reply of its own: a message with that one `tool_use`
 (Claude Code makes its MCP calls one at a time, a message's parallel
 calls too). The first message written after such a call is the one that
-made it. Its rows are left out (`lateID`), and its usage is told with the
+made it. Its rows are left out (`lateID`), and its usage is billed with the
 next reply. A call in that message that wasn't made yet becomes its own
 reply when it is made (`written`). A reply told this way has no words or
 thinking: the model's text before its call is lost to the client.
+
+A reply that more than one message makes (a late message, Claude Code's
+own ToolSearch or WebSearch, a cut stream's retry) tells its client the
+last message's input, cache writes and cache reads, and every message's
+output (`Usage.after`). Claude Code reads the last reply's three as how
+full the conversation is, and each message re-sent what the one before
+it had: summed, a reply after a ToolSearch read 1,154,857 cached tokens
+for a 577k conversation and Claude Code compacted early (sleepy_shibe on
+Discord). The earlier messages' prompts go in `Usage.Deferred`, billed in
+the ledger and never told. The translated route's tries (the empty reply
+asked again, a loop's re-ask, a cut reply's continuation) and web search
+rounds tell theirs the same way (#5115). A later message's prompt counts
+replace the earlier's, a zero too (`Usage.restart`), so a field the later
+one reads nothing in is not left at the earlier's (`TestClaudeOwnCallReplyTellsLastPrompt`,
+`TestClaudeTUILateMessagePromptNotTold`, `TestRetriedReplyTellsLastPrompt`,
+`TestLaterTryZeroCacheReadNotTold`).
 
 The user's own `~/.claude.json` and `~/.claude` are never written by
 magpie (Claude Code writes them, as when it records its onboarding done,
@@ -775,11 +791,27 @@ history to the 1h cache at 2×.
    sent `initialize` first, which Claude Code answers only once it has
    loaded the session; one that can't load it exits 1 ("No conversation
    found with session ID") without answering. `start` then lets the
-   session go and goes on to step 3 in the same request, logged "Claude
+   session go and goes on to step 4 in the same request, logged "Claude
    Code could not go on from the conversation's saved session". Before,
    the turn got 502 "Claude Code ended" with the safety context set, and
    an empty reply without it.
-3. `retire`, then a new run. In the interactive mode, a conversation
+3. `subscriptionBridge.retryBranch` when neither found the run: a turn
+   sent again while its run is still busy answering it (#5405,
+   margbug01) — the client's connection dropped mid-reply, the request
+   was retried, and no cancel reached magpie. A new Claude Code told the
+   whole conversation wrote it all to the cache again, only its own
+   system prompt and tools read from it: on a long conversation a short
+   network blip cost a full cache rewrite, on top of the attempt already
+   paid for and thrown away. The retry's run now resumes a copy of the
+   busy run's session, cut before the turn (`cutReply`, at `backLine`,
+   the line before the turn it was told), and is typed only the turn's
+   messages, so the history is read from the cache. The busy run is not
+   disturbed; `nil` when no busy run of the account is answering this
+   very turn (the request it heard is this one, message for message), the run was started for the turn (no
+   `backLine`), the session can't be copied, the client places its own
+   cache marks, or the run was taken back or is being taken back — the
+   turn told whole, as before.
+4. `retire`, then a new run. In the interactive mode, a conversation
    with a reply that calls no tool is given to the new Claude Code as
    its own transcript (`replaySession`, in `claude_replay.go`): a session
    file of two lines, a user line holding the conversation before that
@@ -945,7 +977,10 @@ A turn after a reply that starts a new run logs why none waited
 (`whyNoRun`, "claude: no run waits for this turn: …"): its run went on
 with a turn this one doesn't follow, waits under another key (the model,
 settings, system prompt or tools differ), waits at an earlier turn, is
-busy with another request, ended (how long ago, and why: `endWhy`, set by
+busy with another request (a turn whose run is busy answering the very
+turn sent again goes on from a copy of its session instead,
+`retryBranch`, so this line is not logged for one), ended (how long ago,
+and why: `endWhy`, set by
 `abortFor`, kept in `b.lost` by conversation), or no run here has had the
 conversation. Tool results that find no run waiting add what became of
 the run that made the calls ("the run that made the calls ended …",

@@ -255,9 +255,10 @@ type agentJSON struct {
 	// another agent offers it again where magpie knows how
 	CLIMissing bool               `json:"cliMissing,omitempty"`
 	Native     *agent.NativeState `json:"native,omitempty"`
-	// Terminal: a Mac's row menu offers Open in terminal, a command
-	// starting it being here (agentCommand)
-	Terminal bool `json:"terminal,omitempty"`
+	// Command: the line that starts it (agentCommand), which its row menu
+	// copies; Terminal: and opens in a terminal, this system having one
+	Command  string `json:"command,omitempty"`
+	Terminal bool   `json:"terminal,omitempty"`
 }
 
 // clientJSON is an agent, or another client the gateway knows, as a
@@ -543,6 +544,9 @@ type settingsJSON struct {
 	// model_auto_compact_token_limit; agent.CodexCompactHeld), written
 	// as the row names them: "[profiles.p] key = value, ..."
 	CodexCompactKeys string `json:"codexCompactKeys,omitempty"`
+	// Claude Code's two prompt-cache lifetimes as it reads them
+	// (agent.TuneRead): the rows beside its compaction in its settings
+	ClaudeCache []claudeCacheJSON `json:"claudeCache,omitempty"`
 	// the magpie model Codex's config runs, when its own window is no
 	// larger than Long conversations' threshold: Codex compacts it at 90%
 	// of that window (codexWindowUnder)
@@ -809,6 +813,7 @@ func settingsState() settingsJSON {
 	s.CodexUsers, s.ClaudeUsers = loginUsers("codex"), loginUsers("claude")
 	s.CodexAsyncHeld = agent.CodexAsyncHeld()
 	s.CodexCompactKeys = codexKeysText(agent.CodexCompactHeld(""))
+	s.ClaudeCache = claudeCacheState()
 	s.CodexWindow = codexWindowUnder(s.Settings.ForAgent("codex"), agent.CodexModel(""))
 	s.WorkBuddy, s.WorkBuddyCheckins = provider.HasWorkBuddy(), provider.WorkBuddyCheckins()
 	s.Trae, s.TraeCheckins = provider.HasTrae(), provider.TraeCheckins()
@@ -1521,6 +1526,25 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		if err := settings.Save(s); err != nil {
 			fail(rw, err)
 			return
+		}
+		writeJSON(rw, settingsState())
+	})
+	// how many results a search that names no count is answered with
+	// (Settings › Models › Web search, #5545): 0 for the default; one
+	// out of range is refused by Save and nothing is written
+	mux.HandleFunc("POST /api/settings/search-count", func(rw http.ResponseWriter, r *http.Request) {
+		var in struct{ N int }
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(rw, err)
+			return
+		}
+		s := settings.Load()
+		if s.SearchCount != in.N {
+			s.SearchCount = in.N
+			if err := settings.Save(s); err != nil {
+				fail(rw, err)
+				return
+			}
 		}
 		writeJSON(rw, settingsState())
 	})
@@ -2795,7 +2819,8 @@ func state() stateJSON {
 		}
 		aj.CLIMissing = a.CLIMissing()
 		// as agentCommand makes it, Launch asked once
-		aj.Terminal = runtime.GOOS == "darwin" && a.WSL == "" && (aj.Launch != "" || a.BinPath() != "")
+		aj.Command = agentLine(a, aj.Launch, runtime.GOOS)
+		aj.Terminal = terminalHere() && aj.Command != ""
 		if a.Native != nil {
 			native := a.Native.Read()
 			aj.Native = &native

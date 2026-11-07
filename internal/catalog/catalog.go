@@ -48,8 +48,9 @@ type Model struct {
 	APIs []string `json:",omitempty"`
 	// Endpoints, in magpie's own models for an agent, are the gateway
 	// paths a request for it is relayed on as it is
-	// (provider.NativeEndpoints, /v1/models' native_endpoints); none for a
-	// group or a model translated anyway.
+	// (provider.NativeEndpoints, /v1/models' native_endpoints); a group's
+	// are those every member relays (provider.GroupEndpoints), which
+	// /v1/models leaves out; none for a model translated anyway.
 	Endpoints []string `json:"-"`
 	// Images is set on a model that takes images as input.
 	Images bool `json:",omitempty"`
@@ -1946,7 +1947,8 @@ const (
 // images or video: "" for any other model. Read from the id alone, as
 // vendors' OpenAI-style lists say no more (text-embedding-3-small,
 // bge-reranker-v2-m3, tts-1, gpt-4o-mini-tts, whisper-1,
-// gpt-4o-transcribe).
+// gpt-4o-transcribe). Voyage AI makes embedding models alone, and names
+// them voyage-* (voyage-4, voyage-code-3), with no "embed" in the id.
 func ServesOf(id string) string {
 	id = strings.ToLower(id)
 	if i := strings.LastIndex(id, "/"); i >= 0 {
@@ -1955,7 +1957,7 @@ func ServesOf(id string) string {
 	switch {
 	case strings.Contains(id, "rerank"):
 		return ServesRerank
-	case strings.Contains(id, "embed") || strings.HasPrefix(id, "bge-"):
+	case strings.Contains(id, "embed") || strings.HasPrefix(id, "bge-") || strings.HasPrefix(id, "voyage-"):
 		return ServesEmbedding
 	case strings.Contains(id, "whisper") || strings.Contains(id, "transcribe"):
 		return ServesTranscription

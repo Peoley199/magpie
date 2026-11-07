@@ -326,6 +326,15 @@ type Request struct {
 	// (buildCodeAssistSent). Left out, the picture came back at the
 	// model's default size (#3820). No other API is known to take it.
 	ImageConfig json.RawMessage
+	// GenConfig holds a Gemini client's generationConfig keys magpie
+	// doesn't read or write itself — topK, seed, the penalties, responseModalities, mediaResolution, speechConfig,
+	// responseFormat — which go on as they were sent when the request is
+	// built again for an upstream that speaks Gemini's own API (the Gemini
+	// one and Vertex AI, geminiRequest): left out, everything else the
+	// client asked was dropped (#3937). Code Assist's and Antigravity's
+	// envelope has no documented spelling of them, so they are not passed
+	// there.
+	GenConfig map[string]json.RawMessage
 	// Safeguards are the caller's safety context, opaque to the gateway.
 	Safeguards    json.RawMessage
 	SafeguardBeta string
@@ -436,6 +445,10 @@ type Event struct {
 	// StopDetails: Anthropic's stop_details, what its classifier said of
 	// a refusal (#1768), carried to the client as it came
 	StopDetails json.RawMessage
+	// Estimated: the vendor's estimated_tokens on an empty thinking_delta,
+	// its live progress beat during a long think (#5390); nil when the
+	// delta carried none
+	Estimated *int
 
 	// Wait: for KError, how long the vendor said to wait before asking
 	// again, when it said; sent on as Retry-After
@@ -470,6 +483,10 @@ type Usage struct {
 	// provider's own tool (searchTally), for the request log's Web search
 	// rows; told nowhere else
 	searches int
+	// restart: the usage of a request that goes on with a reply another
+	// began (after): its prompt counts are the reply's from now on, a
+	// zero too, as what the earlier one counted is the reply's Deferred
+	restart bool
 
 	Reasoning int `json:"reasoning"`
 	// Served: the model the vendor's reply says answered, when it named
@@ -532,6 +549,9 @@ func (u Usage) prompt() int {
 }
 
 func (u *Usage) add(v Usage) {
+	if v.restart {
+		u.Input, u.CacheRead, u.CacheWrite, u.CacheWrite1h = v.Input, v.CacheRead, v.CacheWrite, v.CacheWrite1h
+	}
 	if v.Input > 0 {
 		u.Input = v.Input
 	}
