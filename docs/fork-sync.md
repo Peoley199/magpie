@@ -1,9 +1,9 @@
 # Fork 同步与构建手册（Peoley199/magpie）
 
 本 fork 的上游是 `yetone/magpie`（remote 名 `upstream`），fork 自己的改动长期保留在上游之外。
-本文是 2026-10-30／10-31／11-01／11-05 几轮同步（7499ebb5→cd10dfbe 700 提交、→cdf8151a 40、
-→ffa07395 4、→f7f2d75f 149、→380032cda 11、→854fc8161 237、→6abacd46c 827）沉淀的操作手册，
-配套两个脚本：
+本文是 2026-10-30／10-31／11-01／11-05／11-06／11-07 几轮同步（7499ebb5→cd10dfbe 700 提交、
+→cdf8151a 40、→ffa07395 4、→f7f2d75f 149、→380032cda 11、→854fc8161 237、→6abacd46c 827、
+→84ad780b6 110、→665b9aff1 180）沉淀的操作手册，配套两个脚本：
 
 - `scripts/fork-sync.sh` — 调查→方案→合并→验证→（推送）→构建，一条命令跑完；
 - `scripts/fork-suite-compare.sh` — 合并头与合并前基线的红测试对照（判断"回归还是预存"）。
@@ -179,29 +179,54 @@ internal/gateway），并在纯上游树上逐一复现（20/20 红）。归类�
 另外 `TestMaskedRecordKeepsSentAndBack`（上两轮的红）本轮转绿，属测试间状态相关。
 
 **推送通道**：本轮 `git push origin main` 走默认 ssh 通道一次成功（fetch 同样正常），没有触发
-11-05 记的 443 备用通道；那条备用命令仍然留在 `~/.ssh/config` 注释里，22 端口被重置时用它。
+11-05 记的 443 备用通道；那条备用命令仍留在 `~/.ssh/config` 注释里（全文见 §四）。
 
 **构建与安装**：桌面版按 §七 那组命令重建（`v0.1.3079-28-gf2ab8d842`，81,948,672 字节），
 应用当时在跑，用改名法装上 `D:\magpie`，旧版留档
 `.bak-v0.1.3005-27-g0d06f72e8`（v0.1.3005-27 是上一轮装进去的版本）。
 
-**推送通道**：22 端口直连 github.com 被重置（连接重置），改走
-`ssh://git@ssh.github.com:443/…` + `ProxyCommand=connect -H 127.0.0.1:7897`。备用命令已记在
-`~/.ssh/config` 的注释里；一次性用法：
+### 11-07（v0.1.3079→v0.1.3216，**180 提交**；16 包 88 红，0 回归）
 
-```
-GIT_SSH_COMMAND='ssh -p 443 -i ~/.ssh/Project_JGame_Ugit -o IdentitiesOnly=yes -o ProxyCommand="connect -H 127.0.0.1:7897 ssh.github.com 443"' \
-  git push ssh://git@ssh.github.com:443/Peoley199/magpie.git main
-```
+本轮**没有冲突**：上游也动了 fork 拥有的两个文件（`gateway.go` +302 行、`anthropic_shapes.go`
++101 行），但都自动合并成功。合并后逐项复核指纹存活（`zcodeStartPlan`、`zcodeWorkDir`、
+`systemTextOf`、forwardOnce 调用点、workdir 两层 forms 里的 ZCode 项），上游侧仍然一个都没有；
+`go build ./...`、`gofmt`、`go vet`、fork 的网关测试全绿。
+
+基线对照（基线 = 上次合并的第一个父 `e2df3991e`）：85 个基线红、88 个合并头红；83 个签名一致、
+1 个同类签名变化（`TestLoadConcurrentWithSavesAndEdits`：Windows rename 文件锁，这次卡在
+remove 而非 add，与 10-31 记的同类）、4 个"仅合并头红"。这 4 个全部在**纯上游 `665b9aff1`**
+上以相同签名复现，与 fork 无关：
+
+| 测试 | 包 | 现象（纯上游同样） |
+| --- | --- | --- |
+| `TestCodexOwnModelsFollowPicks` | agent | 分配上限：一次读做了 114 allocs，断言 ≤20（字节/分配上限类，与 Windows 无关也不稳定） |
+| `TestCheckSkillsFindsNewInGitRepo` | library | `git push` 以 `exit status 0xc0000005`（访问冲突）退出，Windows git 崩溃 |
+| `TestAntigravityAppFolder` | sessions | 上游新测试断言 `/work/api`，Windows 上读出的分隔符是 `\work\api` |
+| `TestUnroutedHeldReportSaved` | gateway | 只在满套件负载下红；两边**单跑都过**，报告模板等待 50ms 的持有窗口被负载拉长（时序类） |
+
+`TestUnroutedHeldReportSaved` 是唯一落在 fork 改动包（`internal/gateway`）里的新红，所以额外
+验证过：测试文件与上游**逐字节相同**、本轮的合并没有碰它、单跑在合并头和纯上游都通过——判为
+上游的时序测试在满套件负载下的抖动，不是回归。`TestMaskedRecordKeepsSentAndBack` 继续绿。
+
+**构建与安装**：`v0.1.3216-30-gbaa804eba`（82,914,816 字节，PE subsystem=2），应用正在跑，
+改名法装上 `D:\magpie`，旧版留档 `.bak-v0.1.3079-28-gf2ab8d842`。推送一次成功（默认通道）。
 
 ## 四、远端仓库的处理
 
 - **推送**：`git push origin main`，永远是 fast-forward（合并方式保证不改写历史）。禁止 rebase
   fork 自有提交后强推。
+- **推送通道**：默认 `git push origin main`（ssh）在 11-06、11-07 两轮都一次成功；10-31 与
+  11-05 遇到过 22 端口直连被重置，备用通道是 SSH over 443 + 本机代理
+  （`ssh://git@ssh.github.com:443/…` + `ProxyCommand=connect -H 127.0.0.1:7897`）。一次性用法：
+
+  ```
+  GIT_SSH_COMMAND='ssh -p 443 -i ~/.ssh/Project_JGame_Ugit -o IdentitiesOnly=yes -o ProxyCommand="connect -H 127.0.0.1:7897 ssh.github.com 443"' \
+    git push ssh://git@ssh.github.com:443/Peoley199/magpie.git main
+  ```
 - **下次同步的起点**：合并后 `git merge-base main upstream/main` 就是上游最新提交——后续
   `git fetch upstream && git merge upstream/main` 天然只算增量，无需任何清理。
 - **tag**：上游 tag 用 `git fetch upstream --tags` 补拉；版本号以 `git describe --tags upstream/main`
-  为准（11-05 时是 v0.1.3005 = 6abacd46c）。
+  为准（11-07 时是 v0.1.3216 = 665b9aff1）。
 - 合并提交信息按惯例：一行主题（提交数 + fork 修复保留）+ 正文（上游要点、fork 修复为何保留、
   冲突情况、跑了什么）。
 
