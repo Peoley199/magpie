@@ -1,9 +1,9 @@
 # Fork 同步与构建手册（Peoley199/magpie）
 
 本 fork 的上游是 `yetone/magpie`（remote 名 `upstream`），fork 自己的改动长期保留在上游之外。
-本文是 2026-10-30／10-31／11-01／11-05／11-06／11-07 几轮同步（7499ebb5→cd10dfbe 700 提交、
+本文是 2026-10-30／10-31／11-01／11-05／11-06／11-07／11-11 几轮同步（7499ebb5→cd10dfbe 700 提交、
 →cdf8151a 40、→ffa07395 4、→f7f2d75f 149、→380032cda 11、→854fc8161 237、→6abacd46c 827、
-→84ad780b6 110、→665b9aff1 180）沉淀的操作手册，配套两个脚本：
+→84ad780b6 110、→665b9aff1 180、→db0f2f20d 554）沉淀的操作手册，配套两个脚本：
 
 - `scripts/fork-sync.sh` — 调查→方案→合并→验证→（推送）→构建，一条命令跑完；
 - `scripts/fork-suite-compare.sh` — 合并头与合并前基线的红测试对照（判断"回归还是预存"）。
@@ -210,6 +210,48 @@ remove 而非 add，与 10-31 记的同类）、4 个"仅合并头红"。这 4 �
 
 **构建与安装**：`v0.1.3216-30-gbaa804eba`（82,914,816 字节，PE subsystem=2），应用正在跑，
 改名法装上 `D:\magpie`，旧版留档 `.bak-v0.1.3079-28-gf2ab8d842`。推送一次成功（默认通道）。
+
+### 11-11（v0.1.3216→v0.1.3620，**554 提交**；17 包 103 红，0 回归）
+
+本轮是**一次中断后的续跑**：上一轮 `fork-sync.sh` 在"4. dry-run merge"发现冲突就按设计停下，
+随后有人手工发起了真正的 `git merge --no-ff upstream/main` 并解好了第 4 步的冲突，但没有提交。
+`.git/MERGE_HEAD` 因此留在树上，`internal/gateway/workdir.go` 处于未合并状态。续跑时先核对工作区
+里的解法，再提交、验证、跑套件、构建。
+
+**冲突**：`internal/gateway/workdir.go`。上游 `59d9f5c7d` 把包里 275 个包级正则改成首次使用时
+才编译（新的 `internal/lazyre`），改到了 fork 的 `zcodeWorkDir`；解法是**上游的形式全取**（所有
+`regexp.MustCompile` → `lazyre.New`、`dirForm.re` 的类型 → `*lazyre.RE`），**fork 的 ZCode 条目
+原位保留**：`zcodeWorkDir` 仍在 `callerForms` 与 `turnForms` 的 `<system-reminder>` 作用域里，
+`workPlace` 仍读 `ToolResult` 部件。合并后 `git diff 349471303..HEAD -- internal/gateway/workdir.go`
+的净变化只有 lazyre 那一项，ZCode 部分零 delta。
+
+合并后逐项复核指纹存活（`zcodeStartPlan`、`withoutZCodeSystem`、`systemTextOf`、`zcodeWorkDir`、
+forwardOnce 调用点、workdir 两层 forms 里的 ZCode 项），上游侧仍然一个都没有；
+`go build ./...`、`gofmt -l .`（干净）、`go vet ./...`、fork 的网关测试（`TestWithoutZCodeSystem`、
+`TestWorkDir*`、`TestRuleByFolder`、`TestZCodeStartPlan*`、`TestClaudeRunsMost`、`TestAllCompile`）
+全绿。
+
+基线对照（基线 = 上次合并的第一个父 `349471303`）：88 个基线红、103 个合并头红；87 个签名一致、
+**0 个签名变化**、16 个"仅合并头红"。这 16 个逐个复现，**没有一个是 fork 引起的**：
+
+| 测试 | 包 | 结论 |
+| --- | --- | --- |
+| `TestAppliedOfParsesAnUnchangedFileOnce`、`TestGrokFoldsItsOwnAccount`、`TestOpenMausBotRestartOnMac` | agent | 纯上游 `db0f2f20d` 上同样红 |
+| `TestCodexModelEffortLetsUnrelatedCallsGo`、`TestGatewaySessionsHandOutTheKeptProjection` | usage | 同上（分配字节上限类） |
+| `TestKeepFresh` | catalog | 同上 |
+| `TestSharedCheckedReadsOnceAndKnowsUnknown` | settings | 同上 |
+| `TestCherryStudioImportRow`、`TestPluginPageReadsADay`、`TestPluginPageSharesAPicture`、`TestProviderSaveClientCert`、`TestRestartMinimisedComesBackMinimised` | gui | 同上 |
+| `TestClientPathCoversHandler`、`TestReadOnlyKeyEveryRoute` | gateway | 同上：上游 `4623f5419` 新加 `GET /magpie-ca.crt`，两张 read-only / client-path 表都没补，**上游自己漏的** |
+| `TestMaskedRecordKeepsSentAndBack`、`TestQuietCodexStreamKeptAliveThroughReplyWriters` | gateway | 单跑与纯上游都过，只在 masking 组一起跑时红（测试间共享 maskrec 状态，10-31 记过的同类） |
+
+前 12 个包与上游**逐字节相同**（`git diff upstream/main..HEAD -- internal/<pkg>` 为空，fork 只改
+`internal/gateway` 加 docs/scripts），本就不可能由 fork 引起；剩下 4 个落在 `internal/gateway`
+但测试文件同样与上游逐字节相同，且 2 个在纯上游树上直接复现、2 个是已知的测试隔离缺陷。
+
+**推送**：`git push origin main` fast-forward，一次成功（默认 ssh 通道）。
+
+**构建与安装**：`v0.1.3620-34-gaeda9f342`（89,722,368 字节，PE subsystem=2，资源版本 0.1.3620），
+应用正在跑，改名法装上 `D:\magpie`，旧版留档 `.bak-v0.1.3216-30-gbaa804eba`。
 
 ## 四、远端仓库的处理
 
