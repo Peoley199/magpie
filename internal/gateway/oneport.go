@@ -26,11 +26,13 @@ func (s *Server) Front() http.Handler {
 var clientPrefixes = []string{
 	"/v1", "/v1beta",
 	"/models", "/chat/completions", "/responses", "/messages",
-	"/images", "/embeddings", "/rerank", "/audio", "/videos",
+	"/images", "/embeddings", "/rerank", "/decisions", "/audio", "/videos",
 	"/muse-code/models", CodexPath, AlphaSearchPath, "/mcp",
 	// the key page (KeyPagePath): a key's holder opens it at the address
 	// they give their agents
 	KeyPagePath,
+	// and the join page (JoinPagePath), at the same address
+	JoinPagePath,
 }
 
 // ClientPath: p is one of the gateway's client routes, which `magpie web`

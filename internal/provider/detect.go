@@ -116,6 +116,13 @@ func (p Provider) Detect(ctx context.Context, base, model string, picked ...stri
 		}()
 	}
 	wg.Wait()
+	for i := range out {
+		if out[i].V1 != "" {
+			// answered under the /v1 the URL was typed without: the
+			// base the editor keeps for it is that one
+			out[i].Base = out[i].V1
+		}
+	}
 	return out, nil
 }
 
@@ -165,9 +172,14 @@ func (q Provider) detectOne(proto Protocol, m string, wait time.Duration) (Detec
 		d.Error = "no model to try: type one the vendor serves"
 		return d, nil
 	}
-	k, ok := q.keyFor(proto)
+	// the key a request for m goes to (keySeeing, #4992): a relay whose
+	// keys are each kept for some models is asked m with one that serves it
+	k, ok := q.keySeeing(proto, m)
 	if !ok {
 		d.Error = "no key is on for this endpoint"
+		if _, any := q.keyFor(proto); any {
+			d.Error = "no key that's on for this endpoint serves this model"
+		}
 		return d, nil
 	}
 	if proto != Chat {

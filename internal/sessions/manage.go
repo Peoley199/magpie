@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/settings"
 )
 
@@ -155,13 +156,16 @@ func agentCounts(all []file) []AgentCount {
 // ListAgent is every session of one agent, the most recently active first,
 // with no limit; one nothing was said in is listed too, to be cleared away.
 func ListAgent(agent string) []Managed {
+	alias := provider.UsageAlias()
 	storeMu.RLock()
 	defer storeMu.RUnlock()
 	mu.Lock()
 	defer mu.Unlock()
 	loadCache()
 	defer useDBs()()
-	return listAgent(agent, allFiles())
+	out := listAgent(agent, allFiles())
+	aliasManaged(out, alias)
+	return out
 }
 
 // NativeIDs are the ids of every session the agents named keep themselves,
@@ -196,6 +200,7 @@ type ManageView struct {
 // Only native's agents and the one picked are read: a change to another
 // agent's sessions waits for a page that shows it (#2776).
 func Manage(native map[string]bool, pick func([]AgentCount, map[string]map[string]bool) string) ManageView {
+	alias := provider.UsageAlias()
 	storeMu.RLock()
 	defer storeMu.RUnlock()
 	mu.Lock()
@@ -207,6 +212,7 @@ func Manage(native map[string]bool, pick func([]AgentCount, map[string]map[strin
 	v.Agent = pick(v.Agents, v.Native)
 	if v.Agent != "" {
 		v.Sessions = listAgentWith(v.Agent, all, true)
+		aliasManaged(v.Sessions, alias)
 	}
 	return v
 }
@@ -222,10 +228,13 @@ func readFor(want, all []file, quick bool) (pending map[string]bool, done func()
 }
 
 // idInFile says which agents' session ids are read from inside the
-// session's file, not taken from its name (as assemble does).
+// session's file, not taken from its name (as assemble does). ZCode's are:
+// its database rows are the files, a fork's and a subagent's filed under
+// the session they ran in (ocRoots), which a request names by their own ids
+// (subIDs, zcodeBareID).
 func idInFile(agent string) bool {
 	switch agent {
-	case "codex", "pi", "raft", "cindy", "omp", "dsh", "grok", "droid":
+	case "codex", "pi", "raft", "cindy", "omp", "dsh", "grok", "droid", "zcode":
 		return true
 	}
 	return false
@@ -257,10 +266,13 @@ func nativeIDsWith(agents map[string]bool, all []file, quick bool) map[string]ma
 	for _, fs := range groups {
 		id := sessionID(fs)
 		if a := fs[0].agent; agents[a] {
-			out[a][id] = true
-			// its subagents' calls are counted in it (subIDs)
-			for _, sub := range subIDs(fs, id) {
-				out[a][sub] = true
+			// by every id a request can name it (requestIDs, as
+			// GatewayKeys), its subagents' too: their calls are counted in
+			// it (subIDs)
+			for _, sid := range append([]string{id}, subIDs(fs, id)...) {
+				for _, rid := range requestIDs(a, sid) {
+					out[a][rid] = true
+				}
 			}
 		}
 		if fs[0].agent == "raft" && agents["pi"] {
