@@ -1,9 +1,9 @@
 # Fork 同步与构建手册（Peoley199/magpie）
 
 本 fork 的上游是 `yetone/magpie`（remote 名 `upstream`），fork 自己的改动长期保留在上游之外。
-本文是 2026-10-30／10-31／11-01／11-05／11-06／11-07／11-11 几轮同步（7499ebb5→cd10dfbe 700 提交、
+本文是 2026-10-30／10-31／11-01／11-05／11-06／11-07／11-11／11-12 几轮同步（7499ebb5→cd10dfbe 700 提交、
 →cdf8151a 40、→ffa07395 4、→f7f2d75f 149、→380032cda 11、→854fc8161 237、→6abacd46c 827、
-→84ad780b6 110、→665b9aff1 180、→db0f2f20d 554）沉淀的操作手册，配套两个脚本：
+→84ad780b6 110、→665b9aff1 180、→db0f2f20d 554、→2bb201162 288）沉淀的操作手册，配套两个脚本：
 
 - `scripts/fork-sync.sh` — 调查→方案→合并→验证→（推送）→构建，一条命令跑完；
 - `scripts/fork-suite-compare.sh` — 合并头与合并前基线的红测试对照（判断"回归还是预存"）。
@@ -252,6 +252,42 @@ forwardOnce 调用点、workdir 两层 forms 里的 ZCode 项），上游侧仍�
 
 **构建与安装**：`v0.1.3620-34-gaeda9f342`（89,722,368 字节，PE subsystem=2，资源版本 0.1.3620），
 应用正在跑，改名法装上 `D:\magpie`，旧版留档 `.bak-v0.1.3216-30-gbaa804eba`。
+
+### 11-12（v0.1.3620→v0.1.3788，**288 提交**；18 包 103 红，0 回归）
+
+**无冲突**。上游也改了 fork 拥有的两个文档和 `internal/gateway/gateway.go`（+8 行落在 fork 的
+`zcodeStartPlan` 调用点附近），三处都自动合并成功。合并后逐项复核指纹存活（`zcodeStartPlan`、
+`withoutZCodeSystem`、`systemTextOf`、`zcodeWorkDir`、forwardOnce 调用点、workdir 两层 forms 里的
+ZCode 项），上游侧仍然一个都没有；`go build ./...`、`gofmt -l .`（干净）、`go vet ./...`、fork 的
+网关测试全绿。合并头 `3ccbdd13e`。
+
+**基线对照没有跑成，改用两条硬判据。** `fork-suite-compare.sh` 第一次在"3. 同一个包在基线上重跑"
+卡住：多包 `go test` 的进程 58% CPU、无子进程、四十分钟没有新输出（10 个包出结果后停住），停止后
+按 docs 既有的两条判据定性，结论比签名对照更硬：
+
+1. `git diff upstream/main..HEAD -- internal/<pkg>` 对 18 个红包里的 17 个**全为空**——只有
+   `internal/gateway` 有 fork 的 delta（`anthropic_shapes.go` +82、`gateway.go` +8、workdir 三处、
+   两个测试文件和一份 ZCode fixture）。与上游逐字节相同的代码，红不可能是 fork 引起的。
+2. `internal/gateway` 的 8 个红在**纯上游 `2bb201162`** 树上逐一复现，签名相同：
+
+| 测试 | 纯上游上的签名 |
+| --- | --- |
+| `TestClaudeAsRootEnv` | `want [… "IS_SANDBOX=1"]`：断言 Linux 行为，Windows 上不加该变量 |
+| `TestSweepBridgeProjectsTakesOnlyTheBridgesFolders` | `symlink …: A required privilege is not held by the client`（symlink 权限） |
+| `TestHandedOverGatewayFinishesItsStream` 等 5 个 handover | `file tcp 127.0.0.1:…: A device attached to the system is not functioning`（Windows loopback 文件句柄，10-31 记的 #3568 同类） |
+| `TestHubRootsOfACodexThread` | `called for {Roots:[] …}, want the turn's workspace`（`/work/repo` 在 Windows 不是绝对路径，11-01 记过） |
+
+结果：79 个包 ok、18 个包 FAIL、103 个红测试，**0 回归**。
+
+**`fork-suite-compare.sh` 修了一处**：本轮套件日志里有 4 个 NUL 字节，`grep -A2` 会把整份日志当
+二进制、只打印 `Binary file … matches`，签名对照因此拿不到签名（读起来像"没有变化"）。脚本里读日志
+的每个 grep 都加了 `-a`。
+
+**构建与安装**：`v0.1.3788-34-g3ccbdd13e`（91,620,352 字节，PE subsystem=2，资源版本 0.1.3788），
+应用正在跑，改名法装上 `D:\magpie`，旧版留档 `.bak-v0.1.3786`。注意真正在服务网关的仍是 11-07 起的
+`v0.1.3216` 进程（新进程启动时发现旧网关在跑就让它继续服务），要从托盘退出再启动，新版本才接手。
+
+**推送**：`git push origin main` fast-forward（`2023e3fde..3ccbdd13e`），一次成功。
 
 ## 四、远端仓库的处理
 
