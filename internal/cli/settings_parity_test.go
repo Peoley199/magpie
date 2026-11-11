@@ -230,6 +230,8 @@ var cliForRoute = map[string]string{
 	"POST /api/update/check":               "magpie update check",
 	"POST /api/settings/agent-compact":     "magpie model compact",
 	"POST /api/settings/agent-suffix":      "magpie model suffix",
+	"POST /api/settings/context-cap":       "magpie model context-cap",
+	"POST /api/settings/context-cap-mode":  "magpie model context-cap",
 	"POST /api/update/install":             "magpie update",
 	"GET /api/model-price":                 "magpie model price",
 	"POST /api/model-price":                "magpie model price",
@@ -264,12 +266,20 @@ var notYet = map[string]string{
 	"POST /api/gateway/held/reveal":              W,  // api.go
 	"POST /api/profile/{action}":                 A,  // api.go
 	"POST /api/proxy/check":                      S2, // api.go
+	"POST /api/pipelines/check":                  S2, // pipecheck.go: Settings › Models' Quick check, one real call a pipeline
+	"POST /api/proxies/save":                     S2, // proxies.go: Settings › Network's saved proxies
+	"POST /api/proxies/delete":                   S2, // proxies.go
+	"POST /api/proxies/test":                     S2, // proxies.go
 	"POST /api/set":                              S2, // api.go
+	"POST /api/settings/agent-telemetry":         A,  // api.go
+	"POST /api/settings/bark":                    S2, // api.go: Bark server, key and daily time
+	"POST /api/bark/test":                        S2, // api.go: a test push to Bark
 	"POST /api/settings/allowips":                S2, // api.go
 	"POST /api/settings/bare-ids":                S2, // api.go
 	"POST /api/settings/busy-load":               S2, // api.go
 	"POST /api/settings/checkin-account":         S2, // api.go
 	"POST /api/settings/claude-cache":            S2, // tune.go
+	"POST /api/settings/claude-attribution":      S2, // tune.go
 	"POST /api/settings/codex-agents-v1":         S2, // api.go
 	"POST /api/settings/codex-async-compact":     S2, // api.go
 	"POST /api/settings/codex-service-tier":      S2, // api.go
@@ -328,6 +338,9 @@ var notYet = map[string]string{
 	"POST /api/web-page":                         W,  // apppage.go
 	"GET /api/plugins/builtin":                   P,  // builtins.go
 	"POST /api/plugins/builtin":                  P,  // builtins.go
+	"GET /api/plugins/counts":                    P,  // plugins_counts.go: Discover's installs and likes
+	"GET /api/catalog/models":                    P,  // catalog_models.go: the model editor's Same as picker
+	"POST /api/plugins/like":                     P,  // plugins_counts.go
 	"GET /api/library/browser":                   L,  // browser.go
 	"POST /api/library/browser/setup":            L,  // browser.go
 	"POST /api/library/browser/drag":             L,  // browser.go
@@ -389,6 +402,7 @@ var notYet = map[string]string{
 	"POST /api/library/rtk/upgrade":              L,  // library.go
 	"POST /api/library/skills/check":             L,  // library.go
 	"POST /api/library/skills/probe":             L,  // library.go
+	"POST /api/library/plugins/probe":            L,  // library.go
 	"GET /api/memory":                            L,  // memory.go
 	"POST /api/memory":                           L,  // memory.go
 	"POST /api/memory/digest":                    L,  // memory.go
@@ -398,15 +412,22 @@ var notYet = map[string]string{
 	"POST /api/memory/distill":                   L,  // memory_distill.go
 	"POST /api/memory/distill/run":               L,  // memory_distill.go
 	"POST /api/memory/distill/stop":              L,  // memory_distill.go
+	"POST /api/memory/promote":                   L,  // memory.go
+	"POST /api/memory/skill":                     L,  // memory.go
+	"POST /api/memory/decline":                   L,  // memory.go
 	"POST /api/memory/dream":                     L,  // memory_distill.go
 	"POST /api/memory/dream/run":                 L,  // memory_distill.go
 	"POST /api/memory/dream/undo":                L,  // memory_distill.go
+	"GET /api/memory/semantic":                   L,  // memory_semantic.go
+	"POST /api/memory/semantic":                  L,  // memory_semantic.go
+	"POST /api/memory/rank":                      L,  // memory_semantic.go
 	"POST /api/library/skills/regroup":           W,  // library.go
 	"GET /api/omarchy/widget":                    W,  // omarchy.go
 	"POST /api/omarchy/widget":                   W,  // omarchy.go
 	"GET /api/plugin-pages":                      W,  // pluginpage.go
 	"GET /api/plugin-panels":                     W,  // pluginpage.go
 	"POST /api/plugin-pages/image":               W,  // pageimage.go
+	"POST /api/plugin-pages/arrange":             W,  // pluginpage.go: the sidebar's order of plugin pages, dragged
 	"POST /api/plugin-pages/options":             W,  // pluginpage.go
 	"POST /api/plugin-pages/read":                W,  // pluginpage.go
 	"GET /api/plugins/agents":                    P,  // plugins.go
@@ -448,6 +469,7 @@ var notYet = map[string]string{
 	"POST /api/signin/{id}/cancel":               P,  // providers.go
 	"POST /api/signin/claude-token":              P,  // providers.go
 	"POST /api/signin/import":                    P,  // providers.go
+	"POST /api/signin/export":                    P,  // providers.go
 	"POST /api/stepfun/{id}/session":             P,  // providers.go
 	"POST /api/stepfun/{id}/signout":             P,  // providers.go
 	"GET /api/speeds":                            U,  // sessions_manage.go: the Sessions row's speed curve

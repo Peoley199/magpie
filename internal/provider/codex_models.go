@@ -661,6 +661,28 @@ func CodexNativeHidden() map[string]bool {
 	return out
 }
 
+// CodexOwnLeftOut is the rule for Show Codex's own models turned off
+// (OwnModelsHidden, iiiiiimone on X): it says of a slug in the sign-in's
+// list whether Codex's list leaves it out, so the picker offers magpie's
+// models alone. A model magpie serves on a ChatGPT account of the user's
+// stays, as the Agents page's picker keeps it (Served), and so does keep,
+// the one Codex is set to, which Codex would otherwise run on fallback
+// metadata. nil while the switch is on. Hidden jobs (codex-auto-review) are
+// the caller's to leave.
+func CodexOwnLeftOut(keep string) func(slug string) bool {
+	if !OwnModelsHidden("codex") {
+		return nil
+	}
+	shown, _ := CatalogFor("codex")
+	served := map[string]bool{keep: true}
+	for _, e := range shown {
+		if CodexOwn(e) {
+			served[e.Model] = true
+		}
+	}
+	return func(slug string) bool { return !served[slug] }
+}
+
 // CodexOrder is where each model of Codex's list goes when the user put
 // them in an order of their own on the Agents page (#855), by the slug
 // Codex knows it by — a ChatGPT account's own by its bare one, as the
@@ -717,6 +739,10 @@ func buildCodexListTag(kind string) string {
 				ms = append(ms, catalog.Model{ID: "+" + e.ID})
 			}
 		}
+	}
+	// and Codex's own models left out of its list (OwnModelsHidden)
+	if OwnModelsHidden("codex") {
+		ms = append(ms, catalog.Model{ID: "~ownoff"})
 	}
 	off := slices.Sorted(maps.Keys(CodexNativeHidden()))
 	for _, slug := range off {
@@ -811,9 +837,10 @@ func CodexNativePicked() (map[string]bool, bool) {
 func CodexNativeWindow(restore bool) func(slug string) (n, most int, ok bool) {
 	p, _ := find(All(), "codex")
 	live, _, _ := catalog.Live("codex")
+	capped := settings.Shared()
 	return func(slug string) (int, int, bool) {
 		if n := p.ContextOf(slug); n > 0 {
-			return n, 0, true
+			return capped.CappedOwn(n), 0, true
 		}
 		if !restore {
 			return 0, 0, false
@@ -823,7 +850,7 @@ func CodexNativeWindow(restore bool) func(slug string) (n, most int, ok bool) {
 				// a list without the max (saved before magpie kept
 				// it) leaves the cache's own; Window still raises it to
 				// the window when it's below
-				return m.Context, m.MaxContext, true
+				return capped.Capped(m.Context), capped.Capped(m.MaxContext), true
 			}
 		}
 		return 0, 0, false
@@ -841,8 +868,9 @@ func CodexNativeWindow(restore bool) func(slug string) (n, most int, ok bool) {
 // Codex Plus account.
 func CodexWindow(user, slug string) int {
 	p, _ := find(All(), "codex")
+	capped := settings.Shared()
 	if n := p.ContextOf(slug); n > 0 {
-		return n
+		return capped.CappedOwn(n)
 	}
 	var lists [][]catalog.Model
 	if user != "" {
@@ -857,7 +885,7 @@ func CodexWindow(user, slug string) int {
 	for _, ms := range lists {
 		for _, m := range ms {
 			if n := catalog.Window(m.Context); m.ID == slug && n > 0 {
-				return n
+				return capped.Capped(n)
 			}
 		}
 	}
@@ -870,6 +898,13 @@ func CodexWindow(user, slug string) int {
 func codexWindowsTag() []catalog.Model {
 	p, _ := find(All(), "codex")
 	var out []catalog.Model
+	if n := settings.Shared().ContextCap; n > 0 {
+		id := "~cap"
+		if settings.Shared().ContextCapAll {
+			id = "~capall"
+		}
+		out = append(out, catalog.Model{ID: id, Context: n})
+	}
 	for _, k := range slices.Sorted(maps.Keys(p.Contexts)) {
 		out = append(out, catalog.Model{ID: "=" + k, Context: p.Contexts[k]})
 	}

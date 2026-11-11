@@ -177,6 +177,7 @@ func libraryRoutes(mux *http.ServeMux, w Windows) {
 	browserRoutes(mux, w)
 	memoryRoutes(mux)
 	memoryDistillRoutes(mux)
+	memorySemanticRoutes(mux)
 	mux.HandleFunc("GET /api/library", func(rw http.ResponseWriter, r *http.Request) {
 		v, err := libraryRead(nil, r.URL.Query().Get("glance") == "1")
 		if err != nil {
@@ -242,6 +243,21 @@ func libraryRoutes(mux *http.ServeMux, w Windows) {
 			return
 		}
 		p, err := library.ProbeSkills(in.Source)
+		if err != nil {
+			fail(rw, err)
+			return
+		}
+		writeJSON(rw, p)
+	})
+	// the Claude Code plugins at an address: a folder, a repository, a
+	// marketplace.json (plugin.go); nothing is written
+	mux.HandleFunc("POST /api/library/plugins/probe", func(rw http.ResponseWriter, r *http.Request) {
+		var in struct{ Source string }
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(rw, err)
+			return
+		}
+		p, err := library.ProbePlugins(in.Source)
 		if err != nil {
 			fail(rw, err)
 			return
@@ -588,11 +604,13 @@ func libraryRoutes(mux *http.ServeMux, w Windows) {
 			// Agents is named as the page sends it, so that it is this
 			// and not the instructions' own Agents that "agents" fills
 			Agents []string `json:"agents"`
-			Source string
-			Paths  []string
-			Names  []string // the skills to update, of those a check found changed; to bring in, of those found in the agents
-			Server library.Server
-			Hook   library.Hook // a hook saved (#1790)
+			// Description is a new skill's (skills/create)
+			Description string `json:"description"`
+			Source      string
+			Paths       []string
+			Names       []string // the skills to update, of those a check found changed; to bring in, of those found in the agents
+			Server      library.Server
+			Hook        library.Hook // a hook saved (#1790)
 			// a subagent saved (#2283)
 			Subagent library.Subagent
 			Agent    string            // the agent whose own skill is in the library's way
@@ -681,6 +699,16 @@ func libraryRoutes(mux *http.ServeMux, w Windows) {
 			res, err = library.RemoveHooks([]string{in.Name})
 		case "hooks/remove-all":
 			res, err = library.RemoveHooks(in.Names)
+		case "plugins/install":
+			res, err = library.InstallPlugins(in.Source, in.Names, in.Agents)
+		case "plugins/agents":
+			res, err = library.PluginAgents(in.Name, in.Agents)
+		case "plugins/on":
+			res, err = library.PluginOn(in.Name, in.On)
+		case "plugins/update":
+			res, err = library.UpdatePlugin(in.Name)
+		case "plugins/remove":
+			res, err = library.RemovePlugin(in.Name)
 		case "subagents/save":
 			res, err = library.SaveSubagent(in.Old, in.Subagent)
 		case "subagents/agents":
@@ -689,6 +717,8 @@ func libraryRoutes(mux *http.ServeMux, w Windows) {
 			res, err = library.RemoveSubagents([]string{in.Name})
 		case "skills/install":
 			res, err = library.InstallSkills(in.Source, in.Paths, in.Agents)
+		case "skills/create":
+			res, err = library.CreateSkill(in.Name, in.Description, in.Agents)
 		case "skills/update":
 			res, err = library.UpdateSkill(in.Name, in.Replace)
 			var gone *library.GoneError

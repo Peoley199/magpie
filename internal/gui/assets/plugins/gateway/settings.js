@@ -80,6 +80,7 @@ function renderPort(s) {
 // codex/gpt-5.6-sol. Posted on its own; off by default.
 function renderBareIds(s) {
   renderBusyLoad(s); // Models › Routing's row
+  renderContextCap(s);
   $("#bareIdsSegs").replaceChildren(segs([[false, t("Off")], [true, t("On")]], !!s.bareModelIDs, (on) =>
     writingPrefs(api("settings/bare-ids", { on })).then((ns) => { prefs = state.settings = ns; renderSettings(); })
       .catch((e) => { status(t(e.message), "err"); renderSettings(); })));
@@ -129,6 +130,47 @@ function renderBusyLoad(s) {
     renderBusyLoad(s);
     $("#busyLoadRow .busy-load-at").focus(NO_SCROLL);
   }));
+}
+
+// renderContextCap: one longest context for every model (settings.ContextCap,
+// WJaunita45604 on X). A window a model or its provider has set itself wins;
+// empty or "off" takes the cap away.
+function renderContextCap(s) {
+  const field = input(s.contextCap ? contextsText({ "*": s.contextCap }) : "", t("None"));
+  field.className = "words context-cap";
+  field.style.cssText = "width:96px;flex:none";
+  field.setAttribute("aria-label", t("Longest context"));
+  const save = () => {
+    const v = field.value.trim().toLowerCase();
+    let at = 0;
+    if (v && v !== "off") {
+      const r = parseContexts(v);
+      if (r.error || !r.map["*"]) { status(t("Longest context: {v} is not a number of tokens like 272k", { v: field.value }), "err"); return renderContextCap(s); }
+      at = r.map["*"];
+    }
+    if (at === (s.contextCap || 0)) return renderContextCap(s);
+    writingPrefs(api("settings/context-cap", { at })).then((ns) => { prefs = state.settings = ns; renderSettings(); })
+      .catch((e) => { status(t(e.message), "err"); renderSettings(); });
+  };
+  field.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Enter") field.blur(); if (e.key === "Escape") { field.value = s.contextCap ? contextsText({ "*": s.contextCap }) : ""; field.blur(); } };
+  field.onchange = save;
+  // which windows it holds: only models with none of the user's own, or
+  // every model (the shorter of the two is told; settings.ContextCapAll)
+  const mode = el("button", "proto pick context-cap-mode");
+  mode.type = "button";
+  mode.setAttribute("aria-label", t("Longest context holds"));
+  mode.replaceChildren(el("span", "", t(s.contextCapAll ? "Every model" : "Models without their own")), svg(CHEV, 11, 1.6));
+  mode.onclick = (e) => {
+    e.stopPropagation();
+    if (mode.classList.contains("open")) return closeProtoMenu();
+    openProtoMenu(mode, [{ v: "own", name: t("Models without their own") }, { v: "all", name: t("Every model") }], s.contextCapAll ? "all" : "own",
+      (v) => { if ((v === "all") === !!s.contextCapAll) return; writingPrefs(api("settings/context-cap-mode", { all: v === "all" })).then((ns) => { prefs = state.settings = ns; renderSettings(); }).catch((er) => { status(t(er.message), "err"); renderSettings(); }); },
+      "Longest context holds", "context-cap-menu");
+  };
+  const box = el("div", "");
+  box.style.cssText = "display:flex;gap:8px;align-items:center;justify-content:flex-end";
+  box.append(mode, field);
+  $("#contextCapVal").replaceChildren(box);
 }
 
 // renderCORS: the web pages whose scripts may call the gateway from a

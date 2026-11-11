@@ -556,8 +556,15 @@ var presets = []PresetDef{
 	{ID: "vercel", Name: "Vercel AI Gateway", Icon: "vercel", Kind: KindRelay, Catalog: "vercel",
 		Chat: "https://ai-gateway.vercel.sh/v1", Responses: "https://ai-gateway.vercel.sh/v1", Anthropic: "https://ai-gateway.vercel.sh",
 		Website: "https://vercel.com/docs/ai-gateway", KeysURL: "https://vercel.com/d?to=%2F%5Bteam%5D%2F%7E%2Fai-gateway%2Fapi-keys"},
+	// GMI Cloud (aiandcloud on X): OpenAI-compatible chat completions at
+	// api.gmi-serving.com/v1, its model list at /v1/models, the key as Bearer
+	// (docs.gmicloud.ai quickstart and LLM API reference). Its docs name no
+	// Responses or Messages endpoint, so only Chat is set
+	{ID: "gmicloud", Name: "GMI Cloud", Icon: "gmicloud", Kind: KindRelay,
+		Chat:    "https://api.gmi-serving.com/v1",
+		Website: "https://www.gmicloud.ai", KeysURL: "https://console.gmicloud.ai"},
 	{ID: "opencode-go", Name: "OpenCode Go", Icon: "opencode", Kind: KindRelay, Catalog: "opencode-go",
-		Chat: "https://opencode.ai/zen/go/v1", Responses: "https://opencode.ai/zen/go/v1", Anthropic: "https://opencode.ai/zen/go",
+		Chat: OpenCodeGoChat, Responses: OpenCodeGoChat, Anthropic: OpenCodeGoAnthropic,
 		Note:    "open coding models, $10/month",
 		Website: "https://opencode.ai/docs/go", KeysURL: "https://opencode.ai/auth"},
 	// Cline's plan for open models, at the Cline API with a Cline key: the
@@ -724,6 +731,14 @@ var presets = []PresetDef{
 		Chat: "http://localhost:8000/v1", Responses: "http://localhost:8000/v1", Anthropic: "http://localhost:8000",
 		Decide: "http://localhost:8000/v1",
 		Note:   "local server, port 8000 by default", Website: "https://omlx.ai"},
+	// GPUStack (github.com/gpustack/gpustack), a self-hosted model server:
+	// its OpenAI-compatible API is at <server>/v1 (/v1-openai is the legacy
+	// path), a Bearer API key from its UI, and GET /v1/models lists the
+	// ready models the key may use. The server is the user's own: port 80 by
+	// default, on this machine or another.
+	{ID: GPUStackPreset, Name: "GPUStack", Icon: "gpustack", Kind: KindLocal,
+		Chat: "http://localhost/v1",
+		Note: "your own server and API key", Website: "https://github.com/gpustack/gpustack"},
 	// its decision models (Clef, Clef-Flash, Kev, Laya, D1), served at
 	// /v1/systemone, are marked by capabilities in /v1/models (mlxserve_decide.go)
 	{ID: MLXServePreset, Name: "MLX-Serve", Icon: "mlx-serve", Kind: KindLocal, NoKey: true,

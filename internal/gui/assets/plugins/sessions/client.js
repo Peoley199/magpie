@@ -66,6 +66,12 @@ magpie.plugin("sessions", (ctx) => {
   let speeds = new Map();
   let speedT = 0;
   let speedBusy = false;
+  // speedSkips: ticks left before the next ask while no session has a
+  // speed: nothing heard in curveForget, so a new one's curve, kept by
+  // the gateway, shows within speedRestTicks seconds, and a resting page
+  // asks a fifth as often
+  let speedSkips = 0;
+  const speedRestTicks = 5;
   let speedPop = null;    // { anchor, draw } of the popover open
   let focus = null;           // { agent, id, until }: a session to bring into sight once drawn
   let recordingBusy = false;
@@ -106,8 +112,13 @@ magpie.plugin("sessions", (ctx) => {
   const DRAFTS = "\x00drafts";
   const zcodeDraft = (s) => {
     const home = (data?.home || "").replace(/\\/g, "/").replace(/\/+$/, "");
-    if (!home || s.agent !== "zcode" || !s.cwd) return false;
+    if (!s.cwd) return false;
     const c = s.cwd.replace(/\\/g, "/");
+    // Codex Desktop makes ~/Documents/Codex/<date>/<name> for every chat
+    // started without a project (its outputs/ and work/), and Codex also
+    // runs in temp folders and worktrees
+    if (s.agent === "codex") return /\/Documents\/Codex\/\d{4}-\d{2}-\d{2}\//i.test(c) || scratch(s.cwd);
+    if (!home || s.agent !== "zcode") return false;
     return c === home + "/.zcode/workspace" || c.startsWith(home + "/.zcode/workspace/");
   };
   const groupOf = (s) => zcodeDraft(s) ? DRAFTS : s.cwd || (s.gateway ? GW : "");
@@ -584,6 +595,13 @@ magpie.plugin("sessions", (ctx) => {
         ? "These {agent} sessions were seen only through magpie's gateway: {agent}'s own files of them aren't on this computer (it may run on another one, in a container or with another config folder), so they can't be resumed here. Delete takes one off this list and moves any conversation magpie recorded of it to its trash; Usage keeps what it spent."
         : "Sessions under \"Seen through the gateway\" have no {agent} files on this computer, so they can't be resumed here. Delete takes one off this list and moves any conversation magpie recorded of it to its trash; Usage keeps what it spent.", { agent: a.name })));
     }
+    // output speed is measured as the reply streams through the gateway; a
+    // session file has no per-token times, so with none of the rows measured
+    // the page says where the speed is and where the files' own figures are
+    // (simonzyzy on X: sessions with no provider set up)
+    if (!data.reads?.gateway && data.sessions.length && !data.sessions.some((s) => speedOf(s))) {
+      box.append(el("p", "usage-note sm-note sm-speed-note", t("Live output speed is measured on requests that go through magpie's gateway. For agents that don't, each call's tokens and time are in Usage › Requests, read from their session files.")));
+    }
     const prov = providerBar();
     if (prov) box.append(prov);
     box.append(selectBar(), el("div", "sm-tree"));
@@ -600,7 +618,10 @@ magpie.plugin("sessions", (ctx) => {
 
   function providerBar() {
     if (data.agent !== "codex") return null;
-    const hidden = data.sessions.filter(otherProvider);
+    // Codex's own threads only: its review and title threads (role
+    // subagent) never show in its history, so they are no conversations
+    // to move
+    const hidden = data.sessions.filter((s) => otherProvider(s) && s.role !== "subagent");
     const undo = lastMove?.agent === data.agent && lastMove.moved.length ? lastMove : null;
     if (!hidden.length && !undo) return null;
     const bar = el("div", "row sm-provider");
@@ -966,7 +987,7 @@ magpie.plugin("sessions", (ctx) => {
         openRowMenu(more, acts);
       };
       r.append(more);
-      r.oncontextmenu = (e) => { e.preventDefault(); openRowMenu(more, acts); };
+      r.oncontextmenu = (e) => { e.preventDefault(); openRowMenu(more, acts, { x: e.clientX, y: e.clientY }); };
     } else r.append(folderSlot());
 
     r.title = path;
@@ -1513,7 +1534,8 @@ magpie.plugin("sessions", (ctx) => {
     if (list.length > 5) names.append(el("li", "more", t("+{n} more", { n: list.length - 5 })));
     ed.append(names);
     // a gateway session has no files of its agent's here: say what goes
-    if (list.some((s) => !s.gateway)) ed.append(el("p", "lib-confirm", t("Their files are moved to magpie's trash ({dir}), not erased: Trash puts them back. A session written to in the last minute is left alone, as {agent} may still be running it.", { dir: data.trashDir, agent: a.name })));
+    if (list.some((s) => !s.gateway && !s.forget)) ed.append(el("p", "lib-confirm", t("Their files are moved to magpie's trash ({dir}), not erased: Trash puts them back. A session written to in the last minute is left alone, as {agent} may still be running it.", { dir: data.trashDir, agent: a.name })));
+    if (list.some((s) => s.forget)) ed.append(el("p", "lib-confirm", t("{agent} isn't installed here. These sessions leave this list; its own files are not touched, and Trash puts them back.", { agent: a.name })));
     if (list.some((s) => s.gateway)) ed.append(el("p", "lib-confirm sm-gw-confirm", t("A session seen only through the gateway leaves this list, and any conversation magpie recorded of it is moved to magpie's trash ({dir}): Trash puts it back. {agent}'s own files elsewhere are not touched, and Usage keeps what it spent. One with a request in the last minute is left alone.", { dir: data.trashDir, agent: a.name })));
     const bar = el("div", "bar");
     const go = el("button", "text primary danger-fill", t("Delete"));
@@ -1626,8 +1648,8 @@ magpie.plugin("sessions", (ctx) => {
         r.append(icon(x.icon));
         const who = el("div", "who");
         who.append(el("div", "name", x.title || x.id));
-        who.append(el("div", "sub", [x.name, x.gateway ? t("Seen through the gateway") : x.cwd ? baseName(x.cwd) : "", t("deleted {when}", { when: ago(x.deleted) }),
-          x.gateway ? (x.size ? t("{size} recorded", { size: fmtBytes(x.size) }) : "") : fmtBytes(x.size)].filter(Boolean).join(" · ")));
+        who.append(el("div", "sub", [x.name, x.forgot ? t("Taken off the list") : x.gateway ? t("Seen through the gateway") : x.cwd ? baseName(x.cwd) : "", t("deleted {when}", { when: ago(x.deleted) }),
+          x.forgot ? "" : x.gateway ? (x.size ? t("{size} recorded", { size: fmtBytes(x.size) }) : "") : fmtBytes(x.size)].filter(Boolean).join(" · ")));
         who.title = (x.items || []).map((i) => i.from).join("\n");
         r.append(who);
         const b = el("button", "sess-resume sm-restore");
@@ -1797,16 +1819,19 @@ magpie.plugin("sessions", (ctx) => {
   async function speedTick() {
     if (!speedsShown()) { clearInterval(speedT); speedT = 0; return; }
     if (speedBusy) return;
+    if (speedSkips > 0) { speedSkips--; return; }
     speedBusy = true;
     try {
       const list = await api("speeds");
       speeds = new Map((Array.isArray(list) ? list : []).map((sp) => [sp.agent + "|" + sp.session, sp]));
     } catch { return; } finally { speedBusy = false; }
+    if (!speeds.size) speedSkips = speedRestTicks - 1;
     page?.querySelectorAll(".sm-speed").forEach(fillSpeed);
     speedPop?.draw();
   }
   function speedsOn() {
     if (speedT || !speedsShown()) return;
+    speedSkips = 0;
     speedT = setInterval(speedTick, 1000);
     speedTick();
   }

@@ -192,6 +192,20 @@ protocol, never by a key's name.**
   looks most like what it lets through.
 - Seen 2× (2026-10-09, 2026-10-28).
 
+**When one access list must sit inside another, prove the containment
+for each pair of entry kinds; never try one entry on the other's text.**
+- bf4d8f3e5 (11-11) let a gateway key's model be a `re:` pattern and
+  judged an issued key's glob by matching the issuer's pattern against
+  the glob's text. `[^-]` and `.` take the `*`, so an issuer held to
+  `re:^openai/[^-]*$` issued `openai/*` and the issued key used
+  openai/gpt-4o; `re:^gr` covered `gr*` and with it group/… ids. Its body
+  said only that each test was red with the match switched off, and no
+  test put an issued glob under an issuer's pattern. Fixed in 08cca7311.
+- List the kinds (exact id, glob, pattern, group, account-derived) and
+  test each child kind under each issuer kind with an id the issuer may
+  not use. When containment can't be shown, refuse it.
+- Seen 1× (2026-11-11).
+
 **A security gap a doc names is an open bug, not a description.**
 - docs/subsystems/gateway-routing.md said "There is no `Host` check, so a
   page whose own name resolves to 127.0.0.1 (DNS rebinding) counts as
@@ -275,6 +289,20 @@ writes it.**
   a bit is used twice. After a rebase, grep the values both sides claim.
 - Seen 1× (2026-10-13).
 
+**A cache entry is reused only when every field read back from it
+matches what the key rounded away.**
+- 059d995d5 (11-11) kept AllOf's counted windows under window{key,
+  start's Unix second, scope}, and reused the kept prefix, start and
+  all. A 10-day limit reset and made a 5-hour one 1.7ms later shared
+  the key, so the 5-hour window reported the 10-day start and counted
+  its rows. TestGatewayKeyLimitCLI was red on ubuntu and macOS CI;
+  8b2fb6b08 reuses an entry only when its start equals the limit's.
+  The same commit's package regexps skipped lazyre and turned
+  TestNoEagerPackageRegexps red (d62220d43): it ran chosen tests, not
+  the packages it touched.
+- Test two values that round to one key, in the same second.
+- Seen 1× (2026-11-11).
+
 **A command never takes a flag, or a value it doesn't know, as data to
 write.**
 - `magpie snow --help` took "--help" as a model: it deleted
@@ -345,6 +373,18 @@ rate and at its largest input.**
   on the largest reply a test has.
 - Seen 2× (2026-10-14, 2026-10-18).
 
+**A new route or setting runs the packages whose guards list them.**
+TestEveryRouteHasACommandOrIsNamed (internal/cli) lists every route, and
+TestSettingsSaveKeepsWhatItDoesNotSend (internal/gui) every setting.
+- 11-11: 747632890 (context-cap) and eb56de0b5 (the catalog's model list)
+  ran chosen tests and turned both guards red on CI at 8aae124b0. An hour
+  later 58fb07095 (named proxies, 1,714 lines) did it again with three
+  routes and two settings, a minute after c1a072636 mended the first.
+  Both bodies say what they ran; neither ran `go test ./internal/cli`
+  (40s). The same day three commits that each fit the core's script
+  budget at their own base left it 4 bytes over together (61a93b531).
+- Seen 1× (2026-11-11).
+
 **A full run gives the slow packages room.** `go test ./...` at the default
 10m timeout times out in internal/gateway (#2108), and under load in
 internal/provider and internal/agent. Use -timeout 45m, so "every package
@@ -401,6 +441,39 @@ re-derives every place that discloses it.**
   privacy text in the same commit.
 - Seen 1× (2026-10-08).
 
+**A test waits for the state it checks, not for an earlier step of
+the same start.**
+- TestServingGatesTools waited for the gateway's listener and then read
+  the tool gate at once. ListenAndServe sets the listener first and takes
+  the gate later, after loading rests, acks and groups. On a loaded mote,
+  a full -race run of internal/gateway checked in that gap and went red
+  (#6016). With a 300ms pause injected there, it was red 3 of 3.
+  6fa02550a waits for the gate itself.
+- Before waiting on a "ready" sign, read the code that sets it and check
+  that what you assert is done before that sign, not after it.
+- Seen 1× (2026-11-11).
+
+**A body written "to be rewritten at ship" is rewritten before the
+push.**
+- b9f8548d2 (11-10, account export, 1,037 lines; it writes live sign-ins
+  to files) went to main with only "WIP commit before the full checks;
+  body rewritten at ship." The rewrite never happened, so no record of
+  what was run reaches git. This is the 10-15 SUITE_LINE placeholder
+  again, in another wording.
+- Before pushing, read each commit's body (`git log origin/main..`) for
+  "WIP", "TODO", "rewritten" or a template's placeholder.
+- Seen 1× (2026-11-11).
+
+**A new file's name is checked against the tree before it is written.**
+- 8fa91a852 (11-11) wrote its idle test to internal/agent/dsh_idle_test.go,
+  which already held 544b91ca8's streamIdleTimeoutMs tests, and they went
+  with it. 1c3056a2e put them back minutes later. ac2340d lost
+  three tests the same way.
+- Before pushing, `git diff --stat` a "new" test file: it shows
+  insertions only. Deletions in a file you meant to create are someone
+  else's tests.
+- Seen 1× (2026-11-11).
+
 **A test that reads a dependency's source needs the dependency on disk.**
 - 884dbdb2's TestTrayMenuOpenFrameIsWails read Wails' source through
   `go list -m` Dir. CI's fresh module cache hasn't unpacked it, so main was
@@ -438,6 +511,45 @@ browser API is tried in the real Linux app too.
   reads.
 - Seen 1× (2026-10-11).
 
+**Two paths are compared with links followed on both sides.**
+- 3bb9575dc followed the rtk path's links and compared it with a winget
+  record read as written. macOS's /var is a link to /private/var, so
+  TestRTKWingetFolderWithoutRecord was red on mote (#6127), and the same
+  mismatch sat in askWingetOwns: an rtk under a junctioned folder read as
+  not winget's (a1961f5ca). The test's own expected path was the link too.
+- When one side goes through EvalSymlinks, so does the other, in the code
+  and in the test's want. Run it where the temp folder is a link (macOS).
+- Seen 1× (2026-11-11).
+
+**A path check in a test expects what the code writes, in the file's own
+encoding.**
+- TestPluginImportCarryOnOffRemove wanted filepath.Join's all-backslash
+  path in raw JSON. The import replaces ${CLAUDE_PLUGIN_ROOT} as written
+  (`C:\...\acme-kit/scripts/lint.sh`), and JSON doubles each backslash,
+  so it was red on Windows only, where CI runs no tests (#6065, fixed in
+  ff11275ae).
+- Seen 1× (2026-11-11).
+
+**A fix that keeps something past a collection keeps its siblings
+too.**
+- #2278 took dirent's listings out of a sync.Pool, because "each
+  collection emptied the pool before the next folder was read", and
+  left the 64 KiB read buffer beside them in one. A collection, a Get
+  on another P or -race's dropped Put made a new buffer inside
+  TestListingsOfDifferentSizesMadeOnce's 64 KiB window, so it went red
+  on macOS CI (#5990). The issue sat 19 hours with no owner before
+  6b31147b6 kept the buffers the way listings are, with two
+  collections in the test's window: red 5 of 5 on the old code.
+- Seen 1× (2026-11-11).
+
+**A release step that waits on a vendor has its own timeout-minutes.**
+- notarytool's `--timeout 30m` bounds only its wait for Apple's
+  answer. v0.1.3737's mac job hung in "Notarise and staple" for over
+  90 minutes, under GitHub's six-hour job limit, holding a macOS
+  runner; magpie's mirror job timed out waiting and the version never
+  published. magpie-releases c856019a gives the step 45 minutes.
+- Seen 1× (2026-11-11).
+
 **Reproduce on CI's Go version.**
 - #1184 couldn't be reproduced on go1.27.1 locally. CI ran 1.26.x, and the
   cause was a Go 1.26.8 segfault. Docker `golang:1.26.8` with
@@ -463,6 +575,43 @@ Two habits from them:
   TestProviderListReadsSettingsOnce's 2s bar, now a count of parses
   (a36319d60), and TestCursorEditorCopiedOncePerChange's 100ms linger
   (2efb71ea0).
+
+**A value put in a request's context lives as long as anything that
+holds the context, a stopped timer included.**
+- #5250: TestSocketTurnBodiesFreed kept 1 of 12 turn bodies in full
+  runs. A `context.WithTimeout` under the request's context, cancelled,
+  stays in an idle P's timer heap with its closure, and reached the
+  request through the unrouted watch held as a context value and as
+  the inflight's f.unrouted. 032340056 puts the watch behind a pointer
+  unwatch clears and drops f.unrouted when it ends; the test is red
+  with either half alone.
+- Found by reading a heap path after a goroutine dump showed no
+  holder, not by adding delays: a 300ms injected delay in the first
+  suspect still passed.
+- Seen 1× (2026-11-11).
+
+**An allocation bar is relative to the same call at the small size.**
+- TestAutoVisionDoesNotBuildListsAgain held searcherModel to a fixed
+  50 allocations: 51 on Linux and 130 on Windows with the lists kept as
+  meant (#5123). c1b8010a2 compares 400 models against 4, as the
+  AutoVision half did, and is still red with the cache broken by hand.
+- The same day TestDshRoundWithNothingChangedBuildsNothing's fixed 300
+  read 421 on Windows CI. It now compares a settled round over 402
+  models with one over 2; with the skip broken by hand that is 78375
+  against 1780.
+- Seen 1× (2026-11-11).
+
+**A new route or setting field is run against the guard tests that list
+every route and field, not only its own tests.**
+- f5e1b1091 (11-11) added POST /api/settings/context-cap-mode and
+  Settings.ContextCapAll and ran `cli -run ContextCap`. The CLI parity
+  test (#6102) and the GUI keep test (#6103) list every route and
+  field, and both went red on main; its usage line also broke the help
+  column a test checks (#6104). e0cadc312 added three /api/memory
+  routes the same day with no parity entry.
+- Run the whole internal/cli and internal/gui packages for a new route
+  or field; `grep -n` the parity map for the route before pushing.
+- Seen 1× (2026-11-11).
 
 ## Red tests and releases
 
@@ -526,6 +675,10 @@ cause:
   CI at f191d6423 and was fixed with that patch (50a703190). #2737 got
   three "Not taking it; recording the numbers" comments before a3b48e0f7
   fixed it.
+- 11-11: the same on a third occasion. #5433 had skygunner's patch, with
+  a test red on the old code, for three days with no owner. It went red
+  on ubuntu CI at 296a9292c and was landed unchanged in 855b97a40. A
+  patch on an open red issue is reviewed in the tick it is posted.
   - One test's subtests were filed three times: #2169, #2711 and #2737
     are all TestTranslatedStreamKeepsClientAlive. Search the test's name
     before filing, and file per test.
@@ -906,6 +1059,81 @@ each one.
     `go test ./internal/cli -run Help|HTTPS|TLS|…`, and a -run filter
     skips the guard, which was named for none of those words. A change
     that adds a route runs internal/cli whole, with no -run.
+  - The same commit's `GET /magpie-ca.crt` was in neither
+    clientPrefixes nor readOnlyRoutes, so internal/gateway's
+    TestClientPathCoversHandler and TestReadOnlyKeyEveryRoute were red
+    on ubuntu and macOS CI for about ten hours (db0f2f20d, 5b28e8599)
+    under two tags, until 6b11914df. The CLI fix (20aff50d4) answered
+    one guard and stopped there. A route has three guards: the CLI's,
+    the one-port page's and the read-only key's. A change that adds one
+    runs internal/cli and internal/gateway whole, and a fix for one
+    guard reads the other two.
+  - plugins#601 (muzimu217) brought back the Doubao plugin declined on
+    10-06, now reading Doubao.app's HttpOnly cookies over CDP, clicking
+    through its reward campaigns, installing a .dmg into /Applications
+    and sending requests through a third-party relay. It was closed
+    unrun. A vendor the maintainer declined is checked for before the
+    diff is read: search the repo's closed issues and PRs and
+    docs/contributors.md for the vendor's name.
+- **11-10, criteria still missed.**
+  - The suite: 6af54dc9a (internal/library) and b9f8548d2
+    (internal/provider) each added a package-level regexp.MustCompile.
+    Each ran its own packages, not the root package, whose
+    TestNoEagerPackageRegexps went red on ubuntu and macOS CI. It was
+    found by yinwu01 (#6020) and fixed in a68f114d9. A new package-level
+    var runs the guards in `.` too.
+- **11-11, criteria still missed.**
+  - The suite, a second day for the same two guards: 55dff77b4 (plugin
+    pages behind a cookie proxy) ran `go test -run PluginPage
+    ./internal/gui`. Seven new package-level regexps tripped
+    TestNoEagerPackageRegexps (fixed in de10c6676, #6145), and its 11
+    lines in assets/pluginpages.js put TestCoreScriptBudget over until
+    f54920280 cut a comment (#5918). A `-run` of a package's own tests
+    is not a run of the package; its guards take a second, so run it
+    whole.
+  - A red on main had three "seen again" comments and no owner: #5918
+    (TestCoreScriptBudget, red from 16ed1a952) was commented on at
+    11:51, 12:22 and 13:14, and 8016205e3 shipped past it "commented".
+    The cause was the measure. It counted comments, so each red was paid
+    for by cutting the comments that said why, about 40 times in the
+    budget's history. 6cc182339 counts code only. When a guard keeps
+    going red the same way, fix the guard's class; don't feed it
+    another cut.
+  - A commit's message belongs to that commit: 16ed1a952 carries
+    d1a2e92e8's subject and body word for word (a hint card at the
+    pointer), while its diff is the plugin-page drag order: a new
+    route, a setting and two tests. Its run record names none of them,
+    and the new route wasn't named in the CLI route map, so
+    TestEveryRouteHasACommandOrIsNamed was red on main for hours
+    (#6162, fixed in 1c95c87c2). Before pushing, check that
+    `git show --stat` matches what the subject says.
+    The same day 85e6ec540 (the Paseo agent, 36 files, 887 lines out)
+    was committed on a stale index and took out the six commits before
+    it (WebView2, library skills, OpenCode Go endpoints, remote quotas);
+    its body records runs that passed on that tree. b52c71114 restored
+    them. A stat with files the change never touched is a stale index:
+    stop, don't push.
+  - A value added to a shared list re-runs every loop over it: ab5824aee
+    added "total" to access.Periods and ran internal/access, budget, cli
+    and provider. internal/gateway's
+    TestKeyLimitReservationsStayInTheirWindow loops over every period and
+    crosses each window's end, which a total window doesn't have, and
+    went red on CI (#6165, 535f0dd95). Grep the list's name across the
+    tree and run each package that reads it.
+  - A test that counts work counts that work, not the process's bytes:
+    efdca11be's TestPiGroupEntryKeepsItsMembers compared
+    runtime.MemStats.TotalAlloc, which every goroutine earlier tests left
+    running adds to. Alone it passed; after ~1,000 earlier tests in a full
+    run it was red (#6178, a bisect on mote showed no single test causes
+    it). 7b9ae7cf9 counts how often the group's members are found.
+  - The suite, a third commit the same day: 5a475f90c (OpenCode Go's
+    endpoints) and 0706d7a35 (#6160, an image row on ChatGPT cards) each
+    ran a `-run` of their own tests. TestAddSameKeyOtherFormat still
+    pinned Go's old URL, and TestQuotaSpanCarriesEveryWindowField and
+    TestKeptQuotaReportAsksNobody saw the new Lane and the new row, all
+    red on main until 7e8214d60. Two of them had issues (#4457, #6187)
+    with "still red" comments and no owner. A change to a package runs
+    that package whole.
 - **Done right on 10-17.** The retire stack (0f1666b38 to de671719a)
   diffed staticcheck's U1000 against its base for dead code, b98f906b1
   was red on the old code for an own-account gap, and 8 subscriptions

@@ -514,6 +514,8 @@ func (s *Server) Relisten() error {
 	if s.ln == nil {
 		return nil // not serving
 	}
+	// where it listens now is what a command in another shell is told
+	defer func() { recordListening(s.ln.Addr()) }()
 	to := listenAddr()
 	if s.ln.Addr().String() == to {
 		return nil
@@ -831,6 +833,8 @@ func identifyCaller(w http.ResponseWriter, r *http.Request) (*http.Request, bool
 	}
 	if ok {
 		r = r.WithContext(access.WithIdentity(r.Context(), who))
+		// the names the key gives models, before any route reads one
+		r = aliasRequest(r, who)
 	}
 	r.Header = r.Header.Clone()
 	r.Header.Set("Authorization", "Bearer "+Token)
