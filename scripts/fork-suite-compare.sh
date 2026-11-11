@@ -24,12 +24,16 @@ echo "baseline: $BASE ($(git log -1 --format=%s "$BASE" | cut -c1-70))"
 WT=$(mktemp -d)/baseline-$BASE
 trap 'git worktree remove --force "$WT" 2>/dev/null' EXIT
 
-fail_names() { grep -E '^--- FAIL:' "$1" | sed -E 's/ \([0-9.]+s\)//; s/ +$//' | sort -u; }
+# -a on every read of a suite log: a test's output can carry a NUL byte, and
+# grep then calls the whole log binary and prints "Binary file … matches"
+# instead of the lines asked for — a signature check that finds no signature
+# and reads as "nothing changed" (11-12's log had four NULs).
+fail_names() { grep -aE '^--- FAIL:' "$1" | sed -E 's/ \([0-9.]+s\)//; s/ +$//' | sort -u; }
 
 step() { printf '\n=== %s ===\n' "$*"; }
 
 step "1. packages red on the merge head"
-FAILED_PKGS=$(grep -E '^FAIL\s+github.com/yetone/magpie' "$MERGED_LOG" | awk '{print $2}')
+FAILED_PKGS=$(grep -aE '^FAIL\s+github.com/yetone/magpie' "$MERGED_LOG" | awk '{print $2}')
 [ -n "$FAILED_PKGS" ] || { echo "nothing failed in $MERGED_LOG"; exit 0; }
 echo "$FAILED_PKGS"
 
@@ -65,8 +69,8 @@ SAME=0; DIFF=0
 while IFS= read -r t; do
   [ -z "$t" ] && continue
   name=${t##*FAIL: }
-  b=$(grep -A2 "^--- FAIL: $name" /tmp/fork-baseline.log | sed -n 2p | sed 's/^[[:space:]]*//; s/[0-9]//g' | cut -c1-90)
-  m=$(grep -A2 "^--- FAIL: $name" "$MERGED_LOG"   | sed -n 2p | sed 's/^[[:space:]]*//; s/[0-9]//g' | cut -c1-90)
+  b=$(grep -aA2 "^--- FAIL: $name" /tmp/fork-baseline.log | sed -n 2p | sed 's/^[[:space:]]*//; s/[0-9]//g' | cut -c1-90)
+  m=$(grep -aA2 "^--- FAIL: $name" "$MERGED_LOG"   | sed -n 2p | sed 's/^[[:space:]]*//; s/[0-9]//g' | cut -c1-90)
   if [ "$b" = "$m" ]; then SAME=$((SAME+1)); else DIFF=$((DIFF+1)); echo "SIGNATURE CHANGED: $name"; echo "  base: $b"; echo "  merg: $m"; fi
 done <<EOF
 $(comm -12 <(echo "$BASE_FAILS") <(echo "$MERGED_FAILS"))
