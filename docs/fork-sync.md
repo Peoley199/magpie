@@ -1,9 +1,10 @@
 # Fork 同步与构建手册（Peoley199/magpie）
 
 本 fork 的上游是 `yetone/magpie`（remote 名 `upstream`），fork 自己的改动长期保留在上游之外。
-本文是 2026-10-30／10-31／11-01／11-05／11-06／11-07／11-11／11-12 几轮同步（7499ebb5→cd10dfbe 700 提交、
+本文是 2026-10-30／10-31／11-01／11-05／11-06／11-07／11-11／11-12／11-16 几轮同步（7499ebb5→cd10dfbe 700 提交、
 →cdf8151a 40、→ffa07395 4、→f7f2d75f 149、→380032cda 11、→854fc8161 237、→6abacd46c 827、
-→84ad780b6 110、→665b9aff1 180、→db0f2f20d 554、→2bb201162 288）沉淀的操作手册，配套两个脚本：
+→84ad780b6 110、→665b9aff1 180、→db0f2f20d 554、→2bb201162 288、→f9807c5e8 766、→8df7885d4 5）
+沉淀的操作手册，配套两个脚本：
 
 - `scripts/fork-sync.sh` — 调查→方案→合并→验证→（推送）→构建，一条命令跑完；
 - `scripts/fork-suite-compare.sh` — 合并头与合并前基线的红测试对照（判断"回归还是预存"）。
@@ -288,6 +289,58 @@ ZCode 项），上游侧仍然一个都没有；`go build ./...`、`gofmt -l .`�
 `v0.1.3216` 进程（新进程启动时发现旧网关在跑就让它继续服务），要从托盘退出再启动，新版本才接手。
 
 **推送**：`git push origin main` fast-forward（`2023e3fde..3ccbdd13e`），一次成功。
+
+### 11-16（v0.1.3788→v0.1.4268／.4269，**766 + 5 提交**；19 包 118 红，0 回归）
+
+**冲突**：`internal/gateway/anthropic_shapes.go`，第一次"两边都在文件尾部追加"的冲突——fork 的
+ZCode Start Plan 三函数（`zcodeStartPlan`／`withoutZCodeSystem`／`systemTextOf`）与上游新加的
+`refsRefused`／`hasResultRefs`／`holdsRef`／`withRefsAsText`／`deferredOutUpFront` 落在同一位置。
+解法是两边都保留，**顺序取 fork 块在前、上游块在后**：上游下次继续在文件尾部追加时两处改动位置
+不相交，git 可自动合并；fork 块若放在尾部，下次还会是同一个冲突。注意 git 把两边共有的末尾 `}`
+提到了冲突区外，解完要补回 `systemTextOf` 的收尾括号。
+
+**语义冲突（git 测不出）**：上游重写了同一个文件的导入块并删掉了 `bytes`（上游版本不再用它），
+fork 的 `withoutZCodeSystem` 需要它，合并后的第一次 `go build ./...` 报 `undefined: bytes`。
+这是指纹守护的第三个盲区：**导入块的增删**（前两个是 11-05 的 helper 撞名、11-06 的语义安放）。
+解完冲突先跑 `go build`（不是只跑 `gofmt`）就能立刻撞上它。
+
+**指纹复核**：合并后逐项确认 `zcodeStartPlan`、`withoutZCodeSystem`、`systemTextOf`、
+`zcodeWorkDir`（callerForms 与 turnForms 的 `<system-reminder>` 作用域）、forwardOnce 调用点存活；
+上游侧 `git grep` 仍一个都没有。`go build ./...`、`gofmt -l .`（干净）、`go vet ./...`、fork 的
+网关测试全绿。合并头 `2064f2b75`。
+
+**基线对照没有跑脚本，直接用两条硬判据**（与 11-12 同法；脚本上轮会卡在多包基线重跑）：
+1. 19 个失败包里 18 个与上游**逐字节相同**（`git diff --stat upstream/main..HEAD -- internal/<pkg>`
+   零输出；fork 只改 `internal/gateway` 加 docs/scripts），红不可能是 fork 引起的；
+2. `internal/gateway` 的 8 个红在**纯上游 `f9807c5e8`** 树上逐一复现，签名相同：
+
+| 测试 | 纯上游上的签名 |
+| --- | --- |
+| `TestClaudeAsRootEnv` | `want [… "IS_SANDBOX=1"]`：断言 Linux 行为，Windows 上不加该变量 |
+| `TestSweepBridgeProjectsTakesOnlyTheBridgesFolders` | `symlink …: A required privilege is not held by the client`（symlink 权限） |
+| `TestHandedOverGatewayFinishesItsStream` 等 5 个 handover | `file tcp 127.0.0.1:…: A device attached to the system is not functioning`（Windows loopback 文件句柄，10-31 记的 #3568 同类） |
+| `TestHubRootsOfACodexThread` | `called for {Roots:[] …}, want the turn's workspace`（`/work/repo` 在 Windows 不是绝对路径，11-01 记过） |
+
+又在纯上游树上顺手复现了几个新面孔（都在与上游逐字节相同的包里，双保险）：`TestEveryRouteHasACommandOrIsNamed`
+（上游新路由 `POST /api/quit/disconnect` 没进 CLI 映射表——**上游自己漏的**）、
+`TestFreedHeapLeavesFootprint`（新 `build/darwin` 包，Windows 上 `go -overlay` 的临时路径失败）、
+`TestSQLiteSurvivesMalformedEnv`（Windows `fork/exec … The parameter is incorrect`）、
+`TestPageAwayLetsStatsGo`、`TestProxyCheckSaysAProxyPassedBy`、`TestSlowTransferIsNotCutShort`
+（10-31 记的 `SetReadBuffer` 类）、`TestLoadConcurrentWithSavesAndEdits`（Windows rename 文件锁）。
+结果：82 个包 ok、19 个包 FAIL、118 个红测试，**0 回归**。
+
+**构建时上游又前进了 5 个提交**（`f9807c5e8→8df7885d4`，脚本第二次 fetch 后自动合并
+`9535b8a40`，无冲突）。这 5 个提交只碰 `claudetui`/`cli`/`gui` 六个文件，其中 `ec5b96c44`（#6786）
+恰好把上面那个路由守卫红修了，`3173c4f41` 又给 gui 加了同一张清单的守卫。
+按"记录必须落在推送头"，在推送头 `9535b8a40` 上单独重跑了这三个包：红测试集与套件内**完全一致，
+唯一变化是 `TestEveryRouteHasACommandOrIsNamed` 转绿，无新增红**（推送头净红数 117）。
+其余 16 个失败包在两棵树之间零改动，不必重跑。
+
+**构建与安装**：`v0.1.4269-38-g9535b8a40`（104,633,856 字节，PE subsystem=2，资源版本 0.1.4269），
+应用正在跑，改名法装上 `D:\magpie`，旧版留档 `.bak-v0.1.3788-34-g3ccbdd13e`（91,620,352 字节）。
+运行中的进程仍服务旧构建，要从托盘退出再启动，新版本才接手。
+
+**推送**：`git push origin main` fast-forward（`278db32c2..9535b8a40`），一次成功。
 
 ## 四、远端仓库的处理
 
