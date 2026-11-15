@@ -27,6 +27,13 @@ var readOnlyRefused = []string{
 	"POST /api/show", "POST /api/chat", "POST /api/generate",
 	// writes, another key's routes, the whole trace, debugging
 	"POST /v1/magpie/usage/requests", "POST " + provider.RemoteRefreshPath,
+	// the chat page's models, its chat, files and speech
+	"GET " + ChatPagePath + "/models",
+	"POST " + ChatPagePath + "/anthropic/v1/messages",
+	"POST " + ChatPagePath + "/anthropic/v1/files",
+	"DELETE " + ChatPagePath + "/anthropic/v1/files/{id}",
+	"POST " + ChatPagePath + "/v1/tools/asr",
+	"POST " + ChatPagePath + "/v1/tools/tts",
 	// a Codex reset, which can't be undone (#3850)
 	"POST " + provider.RemoteCodexResetPath,
 	// an update another magpie asks for
@@ -34,7 +41,7 @@ var readOnlyRefused = []string{
 	"GET /v1/magpie/route", "GET /v1/magpie/trace",
 	"GET " + ClaudeRunsPath, "GET " + HeapPath, "GET " + CPUPath, "GET " + GoroutinesPath,
 	"POST " + RestartPath,
-	"POST " + KeysPath, "GET " + KeysPath, "DELETE " + KeysPath + "/{id}", "POST " + OIDCKeysPath,
+	AdminPath, "POST " + KeysPath, "GET " + KeysPath, "DELETE " + KeysPath + "/{id}", "POST " + OIDCKeysPath,
 	"GET /v1/magpie/omarchy", "OPTIONS /v1/magpie/omarchy",
 	// models, a WebSocket's upgrade and count_tokens among them
 	"POST /v1/chat/completions", "POST /chat/completions",
