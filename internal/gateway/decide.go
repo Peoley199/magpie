@@ -544,7 +544,7 @@ func (s *Server) postDecideSent(ctx context.Context, p provider.Provider, model 
 		req.Header.Set("ai-model-id", model)
 		req.Header.Set("ai-evaluation-model-specification-version", "4")
 	}
-	if err := p.Sign(ctx, req, provider.Chat, body); err != nil {
+	if err := p.Sign(ctx, req, p.DecideProtocol(), body); err != nil {
 		return decided{}, err
 	}
 	res, err := p.Do(s.client, req)
@@ -553,10 +553,8 @@ func (s *Server) postDecideSent(ctx context.Context, p provider.Provider, model 
 	}
 	defer res.Body.Close()
 	b, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
-	if res.StatusCode < 300 {
-		b = provider.DecideAnswer(via, b)
-	}
-	return decided{sent: req, body: body, status: res.StatusCode, answer: b, header: res.Header}, nil
+	status, b := provider.DecideResult(via, res.StatusCode, b)
+	return decided{sent: req, body: body, status: status, answer: b, header: res.Header}, nil
 }
 
 // maxSystemOneBody is the most a System One request may be; larger is 413
@@ -801,6 +799,16 @@ func sentEffort(proto provider.Protocol, body []byte, p provider.Provider, model
 	return fitFor(p, model, e)
 }
 
+// sentEffortIf is sentEffort for a model that goes out by the effort it
+// is asked at, a relay's effort family (provider.SentIDAt): for any other
+// the body is not read for it.
+func sentEffortIf(p provider.Provider, model string, proto provider.Protocol, body []byte) string {
+	if p.SentIDAt(model, "") == model {
+		return ""
+	}
+	return sentEffort(proto, body, p, model)
+}
+
 // fitFor is the effort a request asking for want goes to model at, at p:
 // the level of its own nearest (fitEffort), and for a model known to have
 // none to pick from — a thinking switch alone, as Xiaomi's mimo-v2.6-flash
@@ -919,11 +927,11 @@ func agyLevelAsked(agent string, proto provider.Protocol, body []byte) bool {
 }
 
 // withModelEffort is withFixedEffort for a request going to model: a
-// Gemini request's thinkingConfig is the one model takes (withGeminiEffort),
-// which the model the client named needn't tell.
-func withModelEffort(proto provider.Protocol, body []byte, model, effort string) []byte {
+// Gemini request's thinkingConfig is the one model takes (withGeminiEffortFor),
+// using efforts when the provider declares them before the static catalog.
+func withModelEffort(proto provider.Protocol, body []byte, model, effort string, efforts []string) []byte {
 	if proto == provider.Gemini && effort != "" {
-		return withGeminiEffort(body, model, effort)
+		return withGeminiEffortFor(body, model, effort, efforts)
 	}
 	return withFixedEffort(proto, body, effort)
 }
@@ -932,13 +940,17 @@ func withModelEffort(proto provider.Protocol, body []byte, model, effort string)
 // for effort, as model takes it, keeping includeThoughts as asked: a
 // Gemini 2.5 a budget in its range (vertexBudgets; it turns a level away),
 // a Gemini 3 a level of low..high (none takes xhigh or max, and it can't
-// stop thinking, so none is low; above high only where the catalog lists
-// it, Gemini 4 Hydrogen's xhigh), a Gemini before 2.5 nothing, as it
+// stop thinking, so none is low; above high only where the model or catalog
+// lists it, Gemini 4 Hydrogen's xhigh), a Gemini before 2.5 nothing, as it
 // doesn't think. Another model (agy asking an OpenAI one on Gemini's API)
 // is asked the level itself, which the translation reads, and none as a
 // budget of 0. Antigravity CLI's own request sends thinkingBudget -1, or
 // an upper-case level with --effort, which agy allows only per session.
 func withGeminiEffort(body []byte, model, effort string) []byte {
+	return withGeminiEffortFor(body, model, effort, nil)
+}
+
+func withGeminiEffortFor(body []byte, model, effort string, efforts []string) []byte {
 	if effort == "" {
 		return body
 	}
@@ -1000,10 +1012,15 @@ func withGeminiEffort(body []byte, model, effort string) []byte {
 				level = "low"
 			}
 		case at > slices.Index(effortRank, "high"):
-			// above high only where the model lists such a level: Gemini
-			// 4 Hydrogen takes xhigh, every Gemini before it high at most
+			// above high only where the provider or catalog lists such a
+			// level: Gemini 4 Hydrogen takes xhigh, every Gemini before it
+			// high at most
 			fit := "high"
-			if ls := catalog.EffortsOf(m); len(ls) > 0 {
+			ls := efforts
+			if len(ls) == 0 {
+				ls = catalog.EffortsOf(m)
+			}
+			if len(ls) > 0 {
 				if l := catalog.NearestEffort(level, ls); slices.Index(effortRank, l) > slices.Index(effortRank, "high") {
 					fit = l
 				}

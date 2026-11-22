@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net/url"
 	"slices"
 	"strings"
 
@@ -94,6 +95,20 @@ func ProxyOfLogin(id, user string) string {
 		return v
 	}
 	return s.Proxy
+}
+
+// ClaudeProxies are the distinct proxy choices the Claude subscription's
+// accounts send their requests through (ProxyOfLogin): what
+// internal/egress looks the way out up through. No account, none: a user
+// without one is never looked up for.
+func ClaudeProxies() []string {
+	var out []string
+	for _, l := range Logins("claude") {
+		if c := strings.TrimSpace(ProxyOfLogin("claude", l.User)); !slices.Contains(out, c) {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // Via is ctx for requests made on behalf of the provider or signed-in
@@ -283,4 +298,25 @@ func ProxyGone(p Provider) string {
 		}
 	}
 	return ""
+}
+
+// ViaRemoteMagpieAt is ctx for a request to u made on behalf of the
+// Remote magpie whose gateway u is on (its scheme and host): Via of that
+// provider, so the Library's connection to its MCP router goes as its
+// model calls do (hhdaxia on X: a client certificate the remote asks for
+// went with the model calls alone). ctx as it is when no Remote magpie
+// is at u.
+func ViaRemoteMagpieAt(ctx context.Context, u *url.URL) context.Context {
+	if u == nil || u.Host == "" {
+		return ctx
+	}
+	for _, p := range All() {
+		if !p.IsRemoteMagpie() || p.Anthropic == "" {
+			continue
+		}
+		if b, err := url.Parse(p.Anthropic); err == nil && strings.EqualFold(b.Scheme, u.Scheme) && strings.EqualFold(b.Host, u.Host) {
+			return p.Via(ctx)
+		}
+	}
+	return ctx
 }

@@ -102,14 +102,14 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           await p.locator("#usageAgents .row.stat").nth(1).waitFor();
           const notes = await p.locator("#usageAgents .row.stat .num small").allTextContents();
           assert.equal(notes.length, 2, notes.join(" | "));
-          assert(notes[0].includes(await rate("90%")), notes[0]);
+          assert(notes[0].includes(await rate("90.00%")), notes[0]);
           const hitWord = (await rate("")).trim();
           assert(!notes[1].includes(hitWord), notes[1]);
-          const r90 = await rate("90%");
+          const r90 = await rate("90.00%");
           const tiles = await p.locator(".kpi").allTextContents();
           assert(tiles.some((x) => x.includes(r90)), tiles.join(" | "));
 
-          // the requests: 90.0% with one left out, and the Kiro call's cache
+          // the requests: 90.00% with one left out, and the Kiro call's cache
           // cells say nothing counted rather than 0
           await p.locator(":is(#usageTab .opt, .nav-s):visible").nth(1).click();
           const rows = p.locator(".led tbody tr.led-row");
@@ -119,7 +119,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
             return b && { v: b.querySelector(".v").textContent, sub: b.querySelector(".sub")?.textContent || "" };
           }, await say("Cache hit rate"));
           assert(card, "a Cache hit rate card");
-          assert.equal(card.v, "90.0%");
+          assert.equal(card.v, "90.00%");
           assert.equal(card.sub, leftOut);
           const cells = await p.locator(".led").evaluate((tb, [w, r]) => {
             const heads = [...tb.tHead.rows[0].cells].map((c) => c.textContent);
@@ -140,7 +140,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
           await panel.locator('[data-ptab="stats"]').click();
           await panel.locator("#panelUsage .pu-tot").waitFor();
           const blk = await panel.locator("#panelUsage .pu-tot .blk").evaluateAll((bs) => bs.map((b) => b.textContent));
-          assert(blk.some((x) => x.includes("90%") && x.includes(leftOut)), blk.join(" | "));
+          assert(blk.some((x) => x.includes("90.00%") && x.includes(leftOut)), blk.join(" | "));
           assert.deepEqual(errors, []);
         } finally {
           await context.close();

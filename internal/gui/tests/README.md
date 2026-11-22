@@ -550,6 +550,14 @@ named in the square's title, and the session's effort stays. Its subagents'
 effort is on the Subagents row, not a square, and a Claude Code not through
 magpie has no levels, no square and no effort entries.
 
+`claude-effort-max.test.cjs` checks New sessions' effort in Claude Code's
+Details set to max (@daix91 on X): its title ends with the line that max is
+fixed in Claude Code's environment, so /effort can't change it, and nothing
+new shows on the page; another level picked in the slider takes the line out
+at once and in the row drawn again, and max picked puts it back. Chromium
+and WebKit, five languages, 1100 and 560 wide, no sideways scroll; the API
+is faked. Run with `node --test internal/gui/tests/claude-effort-max.test.cjs`.
+
 `claude-subagent-effort-row.test.cjs` draws Claude Code's subagent effort in
 Chromium and WebKit, English and Chinese, at 1100px and 560px: it is at the
 right of the Subagents row in Tiers, laid out as the tiers' efforts are (same
@@ -1128,13 +1136,22 @@ and 1000x700, in Chromium and WebKit, English and Chinese.
 
 `group-pick-filter.test.cjs` covers a group's Add a model picker and the
 filter over the routing groups (#907; PAMI on Discord). A model in the group
-with its reasoning fixed (a/two:max) is ticked, and a click takes that member
-out instead of adding it a second time. A model that is in other groups names
+with its reasoning fixed (a/two:max) is a ticked row of its own, and a click
+takes that member out; the model's own row under it is not ticked. A model
+that is in other groups names
 them, and the whole note shows on hover. The filter keeps the groups whose
 name, id or models match every word typed, and the keyboard stays in it.
 When nothing matches it says so, and Escape clears it. The page never moves,
 and there is no select or left border. In Chromium and WebKit, English and
 Chinese.
+
+`group-member-again.test.cjs` covers adding a model to a group a second
+time at another reasoning (visamzh on X: gpt-6.2-sol at high and at xhigh).
+With sol in the group at xhigh, the picker lists that member ticked and sol
+itself not; a click on sol adds it again, its reasoning is fixed at high, and
+the save sends both members. A group read with sol at two levels keeps both
+rows and sends both back. It fails on the picker that took the model as its
+member at a level. In Chromium and WebKit, English and Chinese.
 
 `old-webkit.test.cjs` holds the page to Safari 15.0, the WebKit macOS 12 can
 have (#220: a regex lookbehind in app.js, a syntax error before Safari 16.4,
@@ -1201,6 +1218,14 @@ every long name is shown whole, each card's bars start at one place and are
 at least 5em, at 420 wide the long names are shortened while no bar is under
 5em and nothing runs past its card, and wide again the names are whole; in
 Chromium and WebKit, English and Chinese.
+
+`usage-cards-steady.test.cjs` opens Usage › Overview with eight allowance
+cards, most still being read (`X-Magpie-Reading`), wheels down and back up
+to a card in the middle, then lets the reads and the curves' history in
+400ms apart. The card being read must not move a pixel in any frame;
+opened again with the heights known, no card in sight may move. All five
+languages, 1100px and 420px, Chromium and WebKit; the API is faked.
+`MAGPIE_ASSETS` selects older assets for the failing comparison.
 
 `usage-sessions-agents-fit.test.cjs` checks Usage › Sessions with 15 agents
 (#929): the agent filter is a menu button like the model and folder ones, no
@@ -1366,6 +1391,16 @@ Daily bars select that day's totals and ranking while keeping the whole chart;
 refresh and metric changes keep the selection, a period change clears it, and
 clicking the selected day clears it too, including days with no calls.
 
+`panel-heatmap.test.cjs` checks that the tray panel's Usage tab ends in the
+recent weeks' heatmap (eiyuuzaki2333 on X): as many weeks as fit the card (at
+least 20 at 440, 8 to 53), the last cell today and the first a Monday, square
+cells inside the card with no sideways scroll, a legend of five shades whose
+quiet one shows on the light panel's white card, levels that follow the tab's
+Tokens/Cost/Requests switch with no new read, a tooltip with the day and its
+value inside the window, and a provider picked in the ranking narrowing it
+(`usage/heatmap?provider=`). Weeks with no call show no card. 440 light and
+320 dark, in every language, Chromium and WebKit.
+
 `usage-refresh.test.cjs` sets the Usage page's refresh period, with a clock in
 place of time: every 5 s to begin with and no read before that, the picker's
 five (off, 5 s, 10 s, 30 s, a minute), off reading no more, a minute reading at
@@ -1492,6 +1527,16 @@ the click scrolls nothing; no coloured stripe down the card or the row. A
 found skill with a byte copy in another agent shows both agents' icons and
 no "differs in"; one that really differs still says so. Chromium and
 WebKit, in English and Chinese, with `/api/plugins` faked.
+
+`library-sections.test.cjs` hides the Library's tabs from Plugins ›
+Built-in (lantian_x on X): the Library row's Sections link opens a menu of
+the tabs, each ticked; unticking Hooks and Environment variables posts the
+plugin's `hide` setting at once and the link says two are hidden; the
+Library page's tabs and, from 1024 points, the sidebar's list leave them
+out, and Hooks, open last, gives way to Instructions. The last tab shown
+can't be hidden and nothing is posted then; nothing but the setting is
+posted at all. Every language, Chromium and WebKit, at 1100, 800 and 420
+points, with the API faked.
 
 `library-problems-hide.test.cjs` opens the Library with Grok Build's
 AGENTS.md failing to stat at every sync (Zachary-wW, #3745), the API
@@ -1705,6 +1750,12 @@ never reached the vendor, went on to the next and that the first doesn't
 rest, tagged "proxy not reachable", in English and Chinese, never "an error
 another account wouldn't fix"; picking the request doesn't move the page.
 Chromium and WebKit, API faked.
+
+`proxy-down.test.cjs` opens Settings → Network with the proxy on Auto and
+a system proxy on loopback that nothing listens on (@bitssly on X: a VPN
+app turned off left Windows' proxy at its port). The proxy line names the
+address found and says requests go direct until it runs again, in all five
+languages, at 1100px and 420px, Chromium and WebKit. The API is faked.
 
 `s3-sync.test.cjs` sets up sync to an S3 bucket from Settings (#296). It
 works as follows, in English and Chinese:
@@ -2676,6 +2727,22 @@ node --test internal/gui/tests/tencent-access-key.test.cjs
 go test -tags nogui ./internal/gui -run TestProviderListTellsTencentAccessKey
 ```
 
+## Alibaba Cloud Token Plan AccessKey grants
+
+`alibaba-ram-grants.test.cjs` covers MetalHqa's report on X: what an
+Alibaba Cloud Token Plan's AccessKey needs to read the plan's usage is said
+under the editor's AccessKey ID (`ALI_RAM`), in the reader's language, and
+the Secret's hint no longer says any Model Studio RAM user will do. A card
+refused with `aliRAMHint`, read from `alibaba_usage.go` itself, says the
+same grants in the reader's language with the raw refusal in its tooltip.
+Volcengine's editor has no such note. 420px with no sideways scroll; all
+five languages, Chromium and WebKit.
+
+```sh
+node --test internal/gui/tests/alibaba-ram-grants.test.cjs
+go test ./internal/provider -run TestAliGatewayRAMNotAuthorised
+```
+
 `plugin-kernel.test.cjs` holds the window's plugin kernel (`kernel.js`) to
 its error boundary, with the Gateway page, the first page a plugin draws
 (`assets/plugins/gateway/`). With the page's drawing made to throw, the page
@@ -2730,6 +2797,17 @@ left border, nothing wider or cut off at 360px, and no such section (nor a
 read of it) in a browser on the page. Every language, Chromium and WebKit,
 with the API faked.
 
+## Instance name
+
+`instance-name.test.cjs` checks a browser tab's title names the magpie it
+shows (starballl on X): "<name> · magpie" from the first paint with
+MAGPIE_NAME's name, the Name field under Settings › Network and sharing ›
+Advanced (closed until a name is set, the variable's name its placeholder),
+a saved name trimmed and in the title at once, a cleared one back to the
+variable's, Advanced open after a reload with a name, nothing wider than
+360px, and the app's own window still "magpie". Every language, Chromium
+and WebKit, with the API faked.
+
 ## Inner scroll boxes keep the wheel
 
 `inner-scroll-contain.test.cjs` wheels a box that scrolls inside a page past
@@ -2770,3 +2848,9 @@ tone, #26251E. It checks that the row draws that picture as a mask in the
 text colour, and that it shows in both themes, all five languages, at 980px
 and 420px, in Chromium and WebKit (chen2652). `ARTIFACT_DIR` keeps the row's
 screenshots.
+
+`plugin-badge-align.test.cjs` checks that the magpie community badge's
+shield, on a card and on Today's pick, and the card's downloads arrow are
+centred on their words: the icon's ink against the words' ink, read from a
+4x screenshot, within 1px. All five languages, 1180px and 420px, Chromium
+and WebKit. `BADGE_LOG` prints each offset.

@@ -330,8 +330,9 @@ var retiredBuiltins = map[string]bool{
 	"devin":           true,
 	CommandCodePlanID: true,
 	// Google bans accounts it sees on Code Assist through Antigravity's
-	// own client (the owner, 11-15): the plugin's 0.2.0 sends nothing and
-	// points to Antigravity (local agy CLI), which drives the user's agy
+	// own client (the owner, 11-15): the built-in asks Google nothing, and
+	// its plugin serves the users who have it, withdrawn for anyone new
+	// (plugin.WithdrawnOf), who are pointed to Antigravity (local agy CLI)
 	"antigravity": true,
 }
 
@@ -511,6 +512,16 @@ func setMigration(id string, f func(m *Migration)) error {
 	return writePrivate(migrationsPath(), append(b, '\n'))
 }
 
+// movesHost is the machine's (or pod's) name, which a moves lock names
+// beside its pid.
+var movesHost = func() string {
+	h, _ := os.Hostname()
+	if h == "" || strings.ContainsAny(h, " \t\n") {
+		return "-"
+	}
+	return h
+}()
+
 // lockMoves keeps two magpies (the app and a CLI, a dev build beside a
 // release) from moving at once.
 func lockMoves() (func(), error) {
@@ -521,14 +532,18 @@ func lockMoves() (func(), error) {
 	for range 2 {
 		f, err := os.OpenFile(p, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 		if err == nil {
-			fmt.Fprint(f, os.Getpid())
+			fmt.Fprint(f, os.Getpid(), " ", movesHost)
 			f.Close()
 			return func() { os.Remove(p) }, nil
 		}
 		// one left by a magpie that died moving (killed, or stopped
-		// mid-move) holds nothing
+		// mid-move) holds nothing. Its pid is asked after only where it
+		// is one: another pod's magpie on the same volume has pids of
+		// its own namespace, so its lock is judged by its age alone.
 		if b, rerr := os.ReadFile(p); rerr == nil {
-			if pid, perr := strconv.Atoi(strings.TrimSpace(string(b))); perr == nil && pid != os.Getpid() && !update.Alive(pid) {
+			f := strings.Fields(string(b))
+			here := len(f) == 1 || len(f) == 2 && f[1] == movesHost
+			if pid, perr := strconv.Atoi(strings.Join(f[:min(len(f), 1)], "")); perr == nil && here && pid != os.Getpid() && !update.Alive(pid) {
 				os.Remove(p)
 				continue
 			}
@@ -697,7 +712,9 @@ func move(ctx context.Context, id string, mv *mover) (err error) {
 		return fmt.Errorf("no %s account to move", id)
 	}
 	had := pluginListed(mv.pkg)
-	if err := installPlugin(ctx, mv.pkg, mv.min); err != nil {
+	// the user's own accounts: a package withdrawn for anyone new is
+	// still theirs (plugin.KeepWithdrawn)
+	if err := installPlugin(plugin.KeepWithdrawn(ctx), mv.pkg, mv.min); err != nil {
 		return installFailed(mv.pkg, err)
 	}
 	installed := !had
@@ -1135,7 +1152,7 @@ func keepMovedCurrent(ctx context.Context) {
 		if mv.min == "" {
 			continue
 		}
-		if err := installPlugin(ctx, mv.pkg, mv.min); err != nil {
+		if err := installPlugin(plugin.KeepWithdrawn(ctx), mv.pkg, mv.min); err != nil {
 			log.Printf("updating %s's plugin: %s", id, err)
 		}
 	}

@@ -51,6 +51,8 @@ func ownMCP() []OwnMCP {
 	}
 	// memory is always there: it needs no model
 	out = append(out, OwnMCP{memoryServerName, "Magpie Memory", MemoryMCPPath})
+	// and so are the sessions: it reads what Settings › Sessions allows
+	out = append(out, OwnMCP{sessionsServerName, "Magpie Sessions", SessionsMCPPath})
 	if gwtool.Served(gwtool.PluginTools) {
 		// a note that can't be read says nothing: the server is listed,
 		// and its tools/list tells
@@ -86,6 +88,8 @@ func OwnMCPTools(ctx context.Context) []OwnMCPServer {
 			s.Tools = []string{GenerateImageTool, GenerateVideoTool, GenerationResultTool}
 		case memoryServerName:
 			s.Tools = []string{memorySearchTool, memorySaveTool, memoryForgetTool, memoryContextTool}
+		case sessionsServerName:
+			s.Tools = []string{sessionsSearchTool, sessionsReadTool}
 		case "magpie-tools":
 			ts, _ := servedTools(ctx)
 			for _, t := range ts {
@@ -118,13 +122,13 @@ func OwnUnready(name string) string {
 		case !searchServed():
 			return "Web search is off in Plugins › Built-in: its tools say so until it is turned on"
 		}
-		return "Nothing searches yet: add a search API in Settings → Models → Web search, or a provider that can search. Until then its tools say so"
+		return "Nothing searches yet: add a search API in Settings › Models › Web search, or a provider that can search. Until then its tools say so"
 	case "magpie-vision":
 		if _, ok := seer(); ok {
 			return ""
 		}
 		if provider.HeldSettings().Vision == "off" {
-			return "Image recognition is off in Settings → Models → Images: its tool says so until a model is picked there"
+			return "Image recognition is off in Settings › Models › Images: its tool says so until a model is picked there"
 		}
 		return "No model that sees images is set up yet: it reads images once a provider with one is added, and says so until then"
 	case imageServerName:
@@ -132,7 +136,7 @@ func OwnUnready(name string) string {
 			return ""
 		}
 		if settings.Shared().ImageGen == "off" {
-			return "Image generation is off in Settings → Models → Images: its tools say so until a model is picked there"
+			return "Image generation is off in Settings › Models › Images: its tools say so until a model is picked there"
 		}
 		return "No model that draws images is set up yet: it draws once a provider with an image model is added, and says so until then"
 	}

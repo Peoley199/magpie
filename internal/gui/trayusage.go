@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/yetone/magpie/internal/egress"
 	"github.com/yetone/magpie/internal/fx"
 	"github.com/yetone/magpie/internal/lazyre"
 	"github.com/yetone/magpie/internal/provider"
@@ -593,6 +594,25 @@ func trayTokens(lang string, t usage.Totals) string {
 	return trayText(lang, "%s tokens (%s)", trayCount(lang, t.Tokens()+t.CacheRead+t.CacheWrite), strings.Join(parts, " · "))
 }
 
+// trayEgressTip is the line the tooltip begins with while the Claude
+// accounts' way out to the internet is in a region Anthropic doesn't list
+// (internal/egress); "" otherwise, an unknown one too.
+func trayEgressTip(lang string, r egress.Result) string {
+	if r.State != egress.Unsupported {
+		return ""
+	}
+	return "⚠ " + trayText(lang, "Claude's way out to the internet is in %s, outside Anthropic's supported regions", r.Loc)
+}
+
+// trayEgress is the Claude accounts' way out as the tray tells it: Unknown
+// with no account.
+var trayEgress = func() egress.Result {
+	if cs := provider.ClaudeProxies(); len(cs) > 0 {
+		return egress.Worst(cs)
+	}
+	return egress.Result{State: egress.Unknown}
+}
+
 // trayIdleTip is the tooltip while the menu bar shows no cards: magpie's
 // name over what went through it today, as the panel's Usage tab counts it
 // (ylorn on Discord: a Linux bar's tooltip said only "magpie"): every
@@ -747,6 +767,7 @@ func trayName(q provider.SubscriptionQuota) string {
 // "18%"), in columns of two when it has more, or its balance alone.
 type trayCell struct {
 	ID     string // stable provider/account identity, captured with the drawn cell
+	Logo   string // the card's icon name ("claude-color"), as the Usage page names it
 	Icon   []byte // the logo as the Usage page has it (SVG or PNG); nil for none
 	Mono   bool   // a black glyph, drawn in the menu bar's text colour
 	Letter string // drawn in its place when there is no logo, or it can't be read
@@ -763,6 +784,30 @@ func trayPlain(cells []trayCell) []trayCell {
 	}
 	return out
 }
+
+// trayClaudeLogos are the logos of Claude's cards: Claude Code's
+// subscription, and a plugin's that signs in to Anthropic.
+var trayClaudeLogos = []string{"claude-color", "claudecode-color"}
+
+// trayAnthropic are the cells with Anthropic's "A\" mark in place of
+// Claude's logo (settings.TrayAnthropicMark): a black glyph, drawn in the
+// menu bar's text colour as every logo there is.
+func trayAnthropic(cells []trayCell) []trayCell {
+	out := slices.Clone(cells)
+	for i, c := range out {
+		if !c.Plain && slices.Contains(trayClaudeLogos, c.Logo) {
+			out[i].Icon, out[i].Mono = trayAnthropicMark, true
+		}
+	}
+	return out
+}
+
+// trayAnthropicMark is Anthropic's mark drawn here, not taken from any
+// file of theirs: a bold "A" whose legs slant as its counter does, and a
+// backslash of the same weight and slant beside it.
+var trayAnthropicMark = []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">` +
+	`<path fill="#000" fill-rule="evenodd" d="M0.6 20 6.84 4h3.6l6.24 16h-3.4l-1.4-3.6H5.4L4 20Zm6.05-6.8h3.98L8.64 8.1Z"/>` +
+	`<path fill="#000" d="M12.84 4h3.4l6.24 16h-3.4Z"/></svg>`)
 
 // trayUsageView is trayCardsView with every window shown, in English.
 func trayUsageView(cards []provider.SubscriptionQuota, now time.Time, left, pace bool) (cells []trayCell, label, tip string) {
@@ -795,6 +840,7 @@ func trayCardsView(lang string, cards []provider.SubscriptionQuota, now time.Tim
 			cells = append(cells, c)
 			continue
 		}
+		c.Logo = q.Icon
 		c.Icon, c.Mono = trayIconFile(q.Icon)
 		if r := []rune(strings.TrimSpace(q.Name)); len(r) > 0 {
 			c.Letter = strings.ToUpper(string(r[0]))

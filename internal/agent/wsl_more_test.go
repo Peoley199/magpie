@@ -26,6 +26,7 @@ var wslMore = []struct {
 	{"hermes", ".hermes/config.yaml", "/v1"},
 	{"morph", ".morph/config.yaml", "/v1"},
 	{"grok", ".grok/config.toml", "/v1"},
+	{"kigi", ".kigi/config.toml", "/v1"},
 	{"droid", ".factory/settings.json", "/v1"},
 	{"fx", ".fx/settings.json", "/v1"},
 	{"commandcode", ".commandcode/providers.json", "/v1"},
@@ -39,6 +40,7 @@ var wslMore = []struct {
 	{"codebuddy", ".codebuddy/models.json", "/v1/chat/completions"},
 	{"cline", ".cline/data/settings/providers.json", "/v1"},
 	{"atomcode", ".atomcode/config.toml", "/v1"},
+	{"open-code-review", ".opencodereview/config.json", "/v1"},
 	{"snow", ".snow/profiles/magpie.json", "/v1"},
 	{"goose", ".config/goose/custom_providers/magpie.json", "/v1"},
 	{"mothx", ".mothx/settings.json", "/v1"},
@@ -69,7 +71,7 @@ func moveHostDirs(t *testing.T) string {
 	t.Helper()
 	moved := t.TempDir()
 	for _, v := range []string{"OPENCODE_CONFIG_DIR", "MIMOCODE_HOME", "DEVECO_CONFIG_DIR", "KIMI_CODE_HOME", "KIMI_SHARE_DIR", "PI_CODING_AGENT_DIR",
-		"HERMES_HOME", "GROK_HOME", "FACTORY_HOME_OVERRIDE", "MINIMAX_DATA_DIR", "QODER_CONFIG_DIR", "QODERCN_CONFIG_DIR", "DSH_HOME", "MISTER_MORPH_CONFIG",
+		"HERMES_HOME", "GROK_HOME", "KIGI_SHARE_DIR", "FACTORY_HOME_OVERRIDE", "MINIMAX_DATA_DIR", "QODER_CONFIG_DIR", "QODERCN_CONFIG_DIR", "DSH_HOME", "MISTER_MORPH_CONFIG",
 		"CODEBUDDY_CONFIG_DIR", "CLINE_DIR", "CLINE_DATA_DIR", "ATOMCODE_HOME", "REASONIX_HOME", "SNOW_CONFIG_DIR", "MOTHX_DIR", "PENGUIN_HOME", "APPDATA"} {
 		t.Setenv(v, filepath.Join(moved, v))
 	}

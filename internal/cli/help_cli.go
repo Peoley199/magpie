@@ -50,6 +50,9 @@ func helpFor(args []string) string {
 		if len(args) > 1 && (args[1] == "project" || args[1] == "projects") {
 			return "  " + libraryProjectUsage
 		}
+		if len(args) > 1 && (args[1] == "plugin" || args[1] == "plugins") {
+			return "  " + libraryPluginUsage
+		}
 		return "  " + libraryUsage
 	case "plugin", "plugins":
 		return pluginUsage
@@ -72,6 +75,12 @@ func helpFor(args []string) string {
 	case "log", "logs":
 		return logUsage
 	case "sessions":
+		if len(args) > 1 && args[1] == "search" {
+			return sessionsSearchUsage
+		}
+		if len(args) > 1 && args[1] == "show" {
+			return sessionsShowUsage
+		}
 		return sessionsUsage
 	case "search":
 		return searchUsage

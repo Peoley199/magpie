@@ -42,11 +42,22 @@ reply it asked for). A rolled-back hook counts as failed and gets no `onResponse
 for that request. It cannot reject requests or register tools. The synchronous middleware API remains available separately.
 
 Context fields: `protocol` (`chat`, `responses`, `anthropic`, `gemini`), `model`,
-`stream`, `path`, `origin`, `agent`, `session`, `cwd`, `query`, `kind`, package `options`, private
+`stream`, `path`, `origin`, `agent`, `caller`, `session`, `cwd`, `query`, `kind`, package `options`, private
 request `state`, an `AbortSignal` and `report(code, bytes)`. Headers and client
 credentials are not forwarded to the hook. Query extraction keeps original model
 input intact while excluding client environment/instruction notices from recall.
 Empty identity fields must not be interpreted as authenticated user identity.
+
+`caller` is `{agent, name, via}`, the agent the request came from through
+any magpies that passed it on: the JS middleware's `ctx.caller` and
+`chat.headers`' `input.caller`, from one function (`pluginCaller` in
+`internal/gateway/plugin_caller.go`). `agent` stays `agentOf(r)`, the
+client that sent this request (`magpie` for one passed on). It is the same
+in `onRequest` and that request's `onResponse`, absent when the gateway
+knows no agent, and each hook gets its own copy of the context, so one
+hook's change to it reaches no other (`TestAsyncGatewayHookToldTheCaller`).
+A request hook still can't refuse a request; a middleware's `ctx.reject`
+can, before a provider is picked.
 
 `kind` is `"subagent"` when the client says the request is a subagent's
 (Claude Code's `x-claude-code-agent-id`, Codex's `x-openai-subagent:
@@ -167,7 +178,16 @@ eleven seconds); each callback uses the configured bounded hook timeout. Request
   requests magpie makes on its own call `serve` directly and run no hooks:
   Codex's compaction and its fallback turn, titles, System One's
   classifier, search and vision (#4847). A request over a provider's byte
-  cap is fitted in the gateway itself, not by a hook (`body_cap.go`).
+  cap is fitted in the gateway itself, not by a hook (`body_cap.go`), as is
+  one over a model's image cap (`image_cap.go`, #6849). The cap is the
+  smaller of the user's `MaxImages` (by model id, `"*"` for all; the
+  editor's Advanced › Images per request, `magpie provider set <id>
+  max-images=8 max-images.<model>=10`) and the one a 400 taught that
+  provider's model: Copilot's words on a Copilot account, and
+  100milionseek's and Coarena's own words, which name their vendor, on any
+  provider. Every image counts, those in a tool_result too; the oldest go
+  first, the latest user message's are kept, and a request with no cap or
+  within it goes as the same bytes. Session files are never touched.
 - `internal/gateway/gateway_hooks.go`: bounded response observation and
   `gatewayReply`, a stream made one reply.
 - `internal/gateway/signin_hooks.go`: sign-in events, and

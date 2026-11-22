@@ -227,6 +227,7 @@
   }
 
   async function load() {
+    window.pmPartners?.again();
     if (!mine && !listings) draw();
     const parts = [
       loadMine().then(() => { draw(); window.renderPluginDot?.(); }),
@@ -236,6 +237,7 @@
       providers ? null : loadProviders().then(drawBody, () => {}),
     ];
     import("./plugincounts.js").then(() => window.pmCounts.load(drawBody), () => {});
+    import("./pluginpartners.js").then(drawBody, () => {});
     await Promise.all(parts);
     askNPM();
     askGit();
@@ -244,6 +246,9 @@
   // the sidebar's dot, followed: Plugins opens on Installed, where the
   // plugins with an update are named at the top
   window.pluginTabTo = (id) => { tab = id; };
+  // opened from another page (app.js show): on Installed when an update
+  // waits, and the opening counted for its partners (provider.CountPage)
+  window.pmOpen = (up) => { if (up) tab = "installed"; api("page", { page: "plugins" }).catch(() => {}); };
   // pluginQuery: Discover, looking for q (the add sheet found nothing by it)
   window.pluginQuery = (q) => {
     query = q;
@@ -367,8 +372,8 @@
     const time = d && !isNaN(d) ? d.toLocaleTimeString(intlLang(), { hour: "2-digit", minute: "2-digit" }) : "";
     if (l.token) return time ? t("GitHub's rate limit for your GitHub token is used up until {time}", { time })
       : t("GitHub's rate limit for your GitHub token is used up for now");
-    return time ? t("GitHub allows 60 requests an hour without a token, used up until {time}. Add a GitHub token in Settings → Network and sharing to raise it to 5,000.", { time })
-      : t("GitHub allows 60 requests an hour without a token, used up for now. Add a GitHub token in Settings → Network and sharing to raise it to 5,000.");
+    return time ? t("GitHub allows 60 requests an hour without a token, used up until {time}. Add a GitHub token in Settings › Network and sharing to raise it to 5,000.", { time })
+      : t("GitHub allows 60 requests an hour without a token, used up for now. Add a GitHub token in Settings › Network and sharing to raise it to 5,000.");
   }
   const checkedAt = () => checked ? new Date(checked.at).toLocaleTimeString(intlLang(), { hour: "2-digit", minute: "2-digit" }) : "";
 
@@ -1046,6 +1051,8 @@
     const match = (l) => !f || [l.name, l.package, summary(l), (l.providers || []).join(" "), l.npm?.publisher || "", l.github?.owner || ""].join(" ").toLowerCase().includes(f);
     const all = everything(match);
     const out = [];
+    const partners = window.pmPartners?.({ f, all: everything(() => true), kindPick, srcPick, onlyNew, entryOf, kindOf, opens, npm, logo, actionFor, glyph, OUTL });
+    if (partners) out.push(partners);
     if (!f) {
       const rec = !kindPick && recSection(all);
       if (rec) out.push(rec);
@@ -1492,6 +1499,14 @@
     const no = el("button", "text", t("Cancel"));
     no.onclick = () => { editing = null; draw(); };
     bar.append(note);
+    // its declared switches are its provider's, kept in that editor: one
+    // place each, and this one points there
+    const sw = subsOf(name(e.spec)).find((x) => x.signedIn && x.options?.length);
+    if (sw) {
+      const go = el("button", "text quiet pm-opts-switches", t("Its switches are in {name}'s editor", { name: subName(sw) }));
+      go.onclick = () => { editing = null; draw(); openProvider(sw.id); };
+      bar.append(go);
+    }
     if (e.options) {
       const clr = el("button", "text quiet", t("Clear"));
       clr.title = t("Runs it with no options");

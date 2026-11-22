@@ -25,9 +25,25 @@
 /* where a session said what was searched for, the words themselves marked */
 .row .sub.sm-hit { color: var(--fg-2); }
 .sm-hit mark { background: var(--accent-soft); color: var(--fg); border-radius: 3px; padding: 0 1px; font-weight: 500; }
+/* a hit's words open the conversation at them */
+button.sub.sm-hit { display: block; width: 100%; height: auto; margin: 1px 0 0; padding: 0; border: 0; background: none; font: inherit; font-size: 11.5px; line-height: inherit; text-align: left; cursor: pointer; border-radius: 0; }
+@media (hover: hover) and (pointer: fine) { button.sub.sm-hit:hover { color: var(--fg); background: none; } }
+/* the same words in other agents' sessions, after the agent's own */
+.sm-else-head { min-height: 32px; gap: 8px; }
+.sm-else-head .name { flex: 1; font-size: 12px; font-weight: 500; color: var(--faint); }
+.sm-else-head .note { flex: none; font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.sm-else > .row + .row { border-top: 1px solid var(--line-2); }
+button.row.sm-else-row { width: 100%; gap: 10px; text-align: left; cursor: pointer; font: inherit; color: inherit; }
+.sm-else-row > svg, .sm-else-row > img { flex: none; width: 16px; height: 16px; }
+.sm-else-row .who { display: flex; flex-direction: column; min-width: 0; }
+.sm-else-row .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* the message a search opened the conversation at, and its words */
+.sess-talk .sess-found { border-radius: 8px; box-shadow: 0 0 0 1px var(--accent-soft); }
+::highlight(sess-found) { background: var(--accent-soft); color: var(--fg); }
+.sess-from { margin-bottom: 8px; }
 .sm-bar { gap: 8px; padding: 0 11px; }
 .sm-bar .grow { flex: 1; }
-.sm-bar .sm-delete, .sm-bar .sm-empty { display: inline-flex; align-items: center; gap: 5px; }
+.sm-bar .sm-delete, .sm-bar .sm-empty, .sm-bar .sm-small { display: inline-flex; align-items: center; gap: 5px; }
 .sm-bar .sm-delete:disabled { opacity: .45; }
 .sm-count { font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .sm-check { flex: none; margin: 0; width: 14px; height: 14px; accent-color: var(--accent); }
@@ -80,6 +96,7 @@ body.window .sm-group .row.sm-sess { padding-left: 32px; }
 .sm-ask-list { grid-column: 1 / -1; min-width: 0; margin: 0; padding: 0; list-style: none; font-size: 12.5px; color: var(--fg); line-height: 1.6; }
 .sm-ask-list li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sm-ask-list li.more { color: var(--muted); }
+.sm-ask-small { grid-column: 1 / -1; min-width: 0; margin: 0; font-size: 12px; color: var(--muted); }
 /* a field in a session dialog (#1991): its label above it, both across the
    dialog, never squeezed into the form's 72px label column */
 .editor label.sm-ask-field { grid-column: 1 / -1; min-width: 0; display: flex; flex-direction: column; gap: 6px; text-align: left; padding-top: 0; }
@@ -115,7 +132,9 @@ body.window .sm-group .row.sm-sess { padding-left: 32px; }
   .row.sm-sess .cost { min-width: 58px; }
 }
 @media (max-width: 420px) {
-  .sm-head { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; row-gap: 6px; }
+  /* the search field fills the head's last row here, so the head's own
+     margin is the whole space to the list */
+  .sm-head { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; row-gap: 6px; margin-bottom: var(--find-gap); }
   .sm-switch { grid-column: 1 / -1; }
   .sm-agent-pick { max-width: 100%; }
   .sm-filter { grid-column: 1; grid-row: 2; width: 100%; min-width: 0; }
@@ -180,6 +199,7 @@ body.window .row.sm-sub-row { min-height: 42px; padding-left: calc(14px + var(--
 .sm-consent-row .lib-switch { flex: none; cursor: pointer; padding: 0; border: 0; }
 .sm-consent-row .lib-switch:disabled { opacity: .5; cursor: default; }
 .sm-consent-acts { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.sm-later .sm-consent-row { cursor: default; }
 /* a session's output speed (session_speed.go): its last two minutes and
    tokens a second now, opening the round's numbers */
 .row.sm-sess .sm-speed { flex: none; display: inline-flex; align-items: center; gap: 10px; height: 30px; padding: 0 8px; border: 0; border-radius: 7px; background: none; color: var(--muted); font: inherit; font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; transition: background-color .15s ease; }
