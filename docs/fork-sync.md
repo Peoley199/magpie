@@ -1,9 +1,9 @@
 # Fork 同步与构建手册（Peoley199/magpie）
 
 本 fork 的上游是 `yetone/magpie`（remote 名 `upstream`），fork 自己的改动长期保留在上游之外。
-本文是 2026-10-30／10-31／11-01／11-05／11-06／11-07／11-11／11-12／11-16 几轮同步（7499ebb5→cd10dfbe 700 提交、
+本文是 2026-10-30／10-31／11-01／11-05／11-06／11-07／11-11／11-12／11-16／11-22 几轮同步（7499ebb5→cd10dfbe 700 提交、
 →cdf8151a 40、→ffa07395 4、→f7f2d75f 149、→380032cda 11、→854fc8161 237、→6abacd46c 827、
-→84ad780b6 110、→665b9aff1 180、→db0f2f20d 554、→2bb201162 288、→f9807c5e8 766、→8df7885d4 5）
+→84ad780b6 110、→665b9aff1 180、→db0f2f20d 554、→2bb201162 288、→f9807c5e8 766、→8df7885d4 5、→700f4127e 541）
 沉淀的操作手册，配套两个脚本：
 
 - `scripts/fork-sync.sh` — 调查→方案→合并→验证→（推送）→构建，一条命令跑完；
@@ -342,11 +342,60 @@ fork 的 `withoutZCodeSystem` 需要它，合并后的第一次 `go build ./...`
 
 **推送**：`git push origin main` fast-forward（`278db32c2..9535b8a40`），一次成功。
 
+### 11-22（v0.1.4269→v0.1.4676，**541 提交**；19 包 142 红，0 回归）
+
+**拉取通道这次先失败后换道**：HTTPS（`-c http.proxy=http://127.0.0.1:7897`）两次都在约 9 分钟、
+45–52% 处被对端掐断（`curl 56 schannel: server closed abruptly (missing close_notify)` → `RPC failed`
+→ `early EOF`），本地 `upstream/main` 原地不动，`git rev-list --count` 会显示 0——**别据此当没有新提交**，
+先 `git ls-remote upstream refs/heads/main` 核对远端真实头。改用 SSH over 443 + 本机代理一次拉完
+（~43 MB pack，约 15 分钟）：
+
+```
+GIT_SSH_COMMAND='ssh -p 443 -i ~/.ssh/Project_JGame_Ugit -o IdentitiesOnly=yes -o ProxyCommand="connect -H 127.0.0.1:7897 ssh.github.com 443"' \
+  git fetch ssh://git@ssh.github.com:443/yetone/magpie.git 'refs/heads/*:refs/remotes/upstream/*' --tags --prune --progress
+```
+
+**合并**：无冲突。上游也改了 fork 拥有的 `internal/gateway/anthropic_shapes.go`、`internal/gateway/gateway.go`
+和 `docs/subsystems/gateway-routing.md`、`docs/subsystems/provider-plugins.md`，四处都自动合并成功。
+合并头 `6909d1b49`。
+
+**指纹复核**：合并后逐项确认 `zcodeStartPlan`、`withoutZCodeSystem`、`systemTextOf`、
+`zcodeWorkDir`（callerForms 与 turnForms 的 `<system-reminder>` 作用域）、forwardOnce 调用点存活；
+上游侧 `git grep` 仍一个都没有。`go build ./...`、`gofmt -l .`（干净）、`go vet ./...`、
+fork 的网关测试（含 `TestAllCompile`）全绿。
+
+**基线对照没有跑脚本，直接用两条硬判据**（与 11-12、11-16 同法；脚本上轮会卡在多包基线重跑）：
+1. 19 个失败包里 18 个与上游**逐字节相同**（`git diff --stat upstream/main..HEAD -- internal/<pkg>`
+   零输出；fork 只改 `internal/gateway` 加 docs/scripts），红不可能由 fork 引起；
+2. `internal/gateway` 的 14 个红在**纯上游 `700f4127e`** 树上逐一复现，签名相同（仅随机端口和
+   临时路径不同）。
+
+14 个 gateway 红中 8 个是历史已知（`TestClaudeAsRootEnv`、5 个 handover 测试、
+`TestHubRootsOfACodexThread`、`TestSweepBridgeProjectsTakesOnlyTheBridgesFolders`），6 个是上游本轮
+新增的 WebSocket relay/socket 测试新面孔：
+
+| 测试 | 纯上游上的签名 |
+| --- | --- |
+| `TestOpenAIProviderTurnsGoOverWebSocketByDefault`、`TestRelayTurnsGoOverWebSocketByDefault`、`TestRelayDeltaNotAnsweredAsOneGoesWhole`、`TestRelaySocketErrorGoesOverHTTP`、`TestRelayRefusedSocketIsLeftToHTTPForHours` | `a reply without its end: : keepalive`（固定等待 80s / 245s；Windows 上 relay 的回复流不结束） |
+| `TestOpenAIProviderSocketOffNeverDials` | 单跑时**真实请求到 api.openai.com**（`401 … Incorrect API key provided: sk-oai`，带 request id）；与上一个测试同进程跑则签名变成 200 keepalive。纯上游单跑同样是真实 401，合并头与上游逐字一致——**上游测试隔离缺陷**（`Resolve` 的假上游在该用例里没生效，测试会触网），不是回归 |
+
+其余 18 个包的红全部落在与上游逐字节相同的代码里（symlink 权限 / Keychain / loopback 文件句柄 /
+分配字节上限 / Windows 路径断言等已知类）。结果：86 个包 ok、19 个包 FAIL、142 个红测试，**0 回归**。
+
+**构建与安装**：`v0.1.4676-40-g6909d1b49`（116,108,288 字节，PE subsystem=2，资源版本 0.1.4676），
+应用正在跑，改名法装上 `D:\magpie`，旧版留档 `.bak-v0.1.4269-38-g9535b8a40`。运行中的进程仍服务
+旧构建，要从托盘退出再启动，新版本才接手。
+
+**推送**：`git push origin main` fast-forward（`9130fe2d4..6909d1b49`），默认 ssh 通道一次成功。
+
 ## 四、远端仓库的处理
 
 - **推送**：`git push origin main`，永远是 fast-forward（合并方式保证不改写历史）。禁止 rebase
   fork 自有提交后强推。
-- **推送通道**：默认 `git push origin main`（ssh）在 11-06、11-07 两轮都一次成功；10-31 与
+- **拉取通道**：HTTPS（`-c http.proxy`）的大增量会在约 9 分钟被对端掐断
+  （`curl 56 schannel: server closed abruptly`），本地 ref 原地不动；11-22 起大增量改走 SSH over 443
+  + 本机代理并显式 refspec 拉 `upstream`（命令见 11-22 节），fetch 完用
+  `git ls-remote upstream refs/heads/main` 核对远端真头。推送仍默认 `git push origin main`（ssh）在 11-06、11-07 两轮都一次成功；10-31 与
   11-05 遇到过 22 端口直连被重置，备用通道是 SSH over 443 + 本机代理
   （`ssh://git@ssh.github.com:443/…` + `ProxyCommand=connect -H 127.0.0.1:7897`）。一次性用法：
 
