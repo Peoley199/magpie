@@ -288,7 +288,7 @@ function svg(d, size = 12, stroke = 1.6) {
   s.innerHTML = `<path d="${d}" fill="none" stroke="currentColor" stroke-width="${stroke}" stroke-linecap="round" stroke-linejoin="round"/>`;
   return s;
 }
-const CHEV = "m5.5 6.5 2.5 2.5 2.5-2.5";
+const CHEV = "m5.5 6.8 2.5 2.5 2.5-2.5";
 // three dots, a row's actions (drawn with a thick round stroke)
 const DOTS = "M3.5 8h.01M8 8h.01M12.5 8h.01";
 const CHEV_R = "m6.5 4.5 3 3.5-3 3.5";
@@ -691,7 +691,7 @@ function renderAgents() {
         return row;
       }
       who.append(cliTag(a));
-      if (a.wired && connectable(a)) row.append(connectSwitch(a));
+      if (a.wired) row.append(connectSwitch(a));
       return row;
     }
     // on the name's line; a row with 「接入」 says it under the name
@@ -3411,8 +3411,10 @@ async function openAgentModels(a, anchor, ev) {
   // until it is ticked (#1337), not every one not taken out
   // own: its pickers offer models the agent reaches on its own beside
   // magpie's (DeepSeek Harness's), which ownHidden leaves out (#1642)
-  let models, ordered = false, only = false, own = false, ownHidden = false;
-  try { ({ models, ordered, only = false, own = false, ownHidden = false } = await api("agent-models/" + encodeURIComponent(a.id))); }
+  // joins: shown only its picks, it takes in the models ticked in a
+  // provider's editor too (eiyuuzaki2333 on X)
+  let models, ordered = false, only = false, own = false, ownHidden = false, joins = false;
+  try { [{ models, ordered, only = false, own = false, ownHidden = false, joins = false }] = await Promise.all([api("agent-models/" + encodeURIComponent(a.id)), import("./agentjoin.js").catch(() => {})]); }
   catch (e) {
     if (agentModelsLoading === loading) { loading.drop(); statusErr(e); }
     return;
@@ -3467,9 +3469,13 @@ async function openAgentModels(a, anchor, ev) {
   const onlySw = libSwitch("use-credits", only, onlySay.textContent);
   onlyBox.title = t("Off: new models are shown. On: only the models ticked here are shown, and a model added later, of any provider, stays off until you tick it");
   onlyBox.append(onlySw, onlySay);
+  // only with Only models I pick on: shown every model, an agent has a
+  // provider's picks already (agentjoin.js)
+  const joinBox = window.amJoin?.(a, joins, () => me, () => disarm()) || el("i");
+  joinBox.hidden = !only;
   // takes back a first click on Hide all or Show all (twice, below)
   let disarm = () => {};
-  foot.append(onlyBox, el("span", "sp"), hideAll, el("span", "am-dot", "·"), reset);
+  foot.append(onlyBox, el("span", "sp"), hideAll, el("span", "am-dot", "·"), reset, joinBox);
   // groups as the catalog has them, routing groups first; a long one
   // starts folded, unless the agent is set to a model in it
   const groups = [];
@@ -3602,6 +3608,7 @@ async function openAgentModels(a, anchor, ev) {
     only = !only;
     onlySw.classList.toggle("on", only);
     onlySw.setAttribute("aria-checked", String(only));
+    joinBox.hidden = !only;
     me.changed = true;
     // the models shown stay as they are, so the list drawn needs nothing
     // new; what comes back is the same, but for one added meanwhile
@@ -3613,6 +3620,7 @@ async function openAgentModels(a, anchor, ev) {
         only = !want;
         onlySw.classList.toggle("on", only);
         onlySw.setAttribute("aria-checked", String(only));
+        joinBox.hidden = !only;
       });
   };
   ownSw.onclick = (e) => {
@@ -3790,7 +3798,7 @@ async function openAgentModels(a, anchor, ev) {
       : kindOf(a) === "codex" ? t("Drag to put them in the order {agent} lists them; new models go last", { agent: a.name })
       : t("Drag to put them in the order magpie hands them to {agent}; new models go last", { agent: a.name });
     if (order) foot.replaceChildren(footNote, el("span", "sp"), unorder);
-    else foot.replaceChildren(onlyBox, el("span", "sp"), hideAll, el("span", "am-dot", "·"), reset);
+    else foot.replaceChildren(onlyBox, el("span", "sp"), hideAll, el("span", "am-dot", "·"), reset, joinBox);
     list.scrollTop = 0;
     draw();
   };
@@ -4082,6 +4090,8 @@ const EXTRA_GLYPH = {
   "sign-in": "M8 2.5a2.75 2.75 0 1 1 0 5.5 2.75 2.75 0 0 1 0-5.5zM3 13.5c.4-2.4 2.4-3.9 5-3.9s4.6 1.5 5 3.9",
   ultracode: "M3 4.25h4M3 8h2.5M3 11.75h4M9.5 4.25l3.5 3.75-3.5 3.75",
   statusline: "M2.75 3.25h10.5v9.5H2.75zM2.75 10h10.5M4.75 11.4h3.5",
+  // a bolt: agy's fast tools
+  fasttools: "M9.25 2.25 4 9h3.75l-1 4.75L12 7H8.25z",
   // the subagents' branch, with effort's rising bars after it
   [SUB_EFFORT]: "M3.25 2.75v10.5M3.25 9.25c0-2.2 1.6-3.75 3.9-3.75h.6M9.25 13.25v-2M11.5 13.25v-4M13.75 13.25v-6",
   // the subagents' branch, ending on a pin: their model, set by magpie
@@ -4786,6 +4796,8 @@ const TOGGLES = {
   ultracode: { label: "ultracode", note: "Claude plans a workflow for each substantive task", said: "{agent} ultracode → {value}" },
   // its note is the agent's own, on its field's on (Codex's footer isn't Claude Code's)
   statusline: { label: "status line", said: "{agent} status line → {value}" },
+  // agy's fast-tools plugin (internal/fasttools)
+  fasttools: { label: "fast tools", said: "{agent} fast tools → {value}" },
 };
 function toggled(f) { return Object.hasOwn(TOGGLES, f.key); }
 function fieldToggle(a, f) {
@@ -7939,6 +7951,14 @@ function proxyPicker() {
   return box;
 }
 
+// gatewayKeysRow: the gateway keys that may use a saved provider, ticked
+// here as in each key's models (justforlxz on X), by providerkeys.js
+function gatewayKeysRow(p) {
+  const b = el("button", "rt-cond on gw-keys", "…"), row = p?.id ? field(t("Gateway keys"), b) : [];
+  if (p?.id) import("./providerkeys.js").then(() => gatewayKeysFill(p, b, row), () => {});
+  return row;
+}
+
 // concurrencyField: requests each key or account has out at once (Lemon:
 // Codex risk control past five); "" takes the plugin's, as its placeholder
 function concurrencyField(p) {
@@ -8152,7 +8172,8 @@ function advancedSet(d, p) {
     [d.concurrency, d.maxAccounts, d.queueLimit, d.queueWait, d.maxRPM, d.priceRate, d.topUpRate ?? p?.topUpRate, d.contexts, d.outputs, d.compacts].some((v) => String(v ?? "").trim()) ||
     !!d.rateWindows?.length ||
     !!(d.searches || d.authHeader || d.passUserAgent === false || d.unredacted || d.countFree || d.billing || d.pinUpstream || d.nativeCompaction || d.balanceToken || d.limitRestOff || d.noBalanceProbe || d.http1 || d.socket || d.imageFilesOff || d.passErrors || d.clientCert || d.serverCA || d.serverPin || d.resolve) ||
-    !!d.fallback?.length || !!(p?.balanceToken?.set || p?.connectAgents || p?.maxImages);
+    !!d.fallback?.length || !!(p?.balanceToken?.set || p?.connectAgents || p?.maxImages) ||
+    (p?.accessKey?.vendor === "aws" && !!(p.accessKey.id || p.accessKey.secretSet));
 }
 function priceRateError(ed) {
   shown(ed.querySelector("input.price-rate"))?.focus(NO_SCROLL);
@@ -9824,7 +9845,7 @@ function drawEditor(p, presetID) {
     const perAccount = subOf(a.agent) ? accountProxyPicker(a, p) : null;
     if (perAccount) proxies.append(perAccount);
     advIn.append(...field(t("Proxy"), proxies));
-    advIn.append(...concurrencyField(p));
+    advIn.append(...concurrencyField(p), ...gatewayKeysRow(p));
     advIn.append(...priceRateField(), ...countFreeField(), ...billingField(), ...rateWindowsField());
     if (p.cline) advIn.append(...upstreamField());
     advIn.append(...unmaskRow(""));
@@ -9877,7 +9898,7 @@ function drawEditor(p, presetID) {
       if (picked === false) return pickError();
       const body = { id: p.id, models: chosenIds(), noModels: noneChosen(), bestInFamily: bestChosen(), unlisted: draft.unlisted, hiddenDrawers: draft.hiddenDrawers, hiddenVideomakers: draft.hiddenVideomakers, fallback: draft.fallback, contexts: cx.map, outputs: ox.map, compacts: cpx.map, maxImages, proxy, accountProxies: own.map, maxConcurrency, maxAccounts, ...queue, priceRate, rateWindows, modelPrefs: modelPrefsOfDraft(), pinUpstream: !!draft.pinUpstream, unredacted: !!draft.unredacted, countFree: !!draft.countFree, billing: draft.billing || "", ...(p.carriesCompaction ? { nativeCompaction: !!draft.nativeCompaction } : {}), ...routingOfDraft(p) };
       saving(saveBtn, t("Saving…"));
-      saveAccountModelsDraft(picked).then(() => savePluginOptions(subOf(a.agent))).then(() => providerAction("save", body, t("{name} saved", { name: p.name })), (e) => { doneSaving(saveBtn); editorError(e.message || String(e)); }); };
+      saveAccountModelsDraft(picked).then(() => savePluginOptions(subOf(a.agent))).then(() => self.saveGatewayKeys?.(p)).then(() => providerAction("save", body, t("{name} saved", { name: p.name })), (e) => { doneSaving(saveBtn); editorError(e.message || String(e)); }); };
     bar.append(cancel, saveBtn);
     ed.append(bar);
     return ed;
@@ -9995,6 +10016,8 @@ function drawEditor(p, presetID) {
     };
     side.append(b);
   }
+  // a Vibe plan's key from a sign-in to Mistral (mistralsignin.js)
+  if (pr?.id === "mistral") import("./mistralsignin.js").then(() => mistralSignIn(side, key, save), () => {});
   const keyWrap = el("div", "pair");
   keyWrap.append(key, side);
   // Vertex AI: no key, the user's Google Cloud project's token
@@ -10090,7 +10113,7 @@ function drawEditor(p, presetID) {
   const perKey = keyProxyPicker(p);
   if (perKey) proxies.append(perKey);
   advIn.append(...field(t("Proxy"), proxies));
-  advIn.append(...concurrencyField(p));
+  advIn.append(...concurrencyField(p), ...gatewayKeysRow(p));
   advIn.append(...priceRateField(), ...keyRateField(p, "topUpRateField", custom || p?.topUpRate), ...keyRateField(p), ...countFreeField(), ...billingField(), ...rateWindowsField());
 
   if (p?.cline || (isNew && pr?.id === "clinepass")) advIn.append(...upstreamField());
@@ -10244,13 +10267,15 @@ function drawEditor(p, presetID) {
     ed.append(...field(t("Team project ID"), proj, t("Only for a key on a team's GLM Coding Plan: both are in {p}'s console, under the team's organization and project. With them the Usage page shows the team's 5-hour and weekly windows.", { p: pr?.name || p.name })));
   }
 
-  // plan windows told only to an access key (Volcengine #1427, Tencent #1574);
-  // the saved Secret never comes back here
+  // plan windows told only to an access key (Volcengine #1427, Tencent #1574),
+  // or Bedrock's AWS access key that signs its requests in place of the API
+  // key (#7687); the saved Secret never comes back here
   const access = p ? p.accessKey : pr?.accessKey ? { vendor: pr.accessKeyVendor || "volcengine", id: "", secretSet: false } : null;
   let accessAt = () => {}, accessShown = () => !!access;
+  const aws = access?.vendor === "aws";
   if (access) {
     const tc = access.vendor === "tencent";
-    const idName = tc ? t("SecretId") : t("AccessKey ID"), secretName = tc ? t("SecretKey") : t("Secret Access Key");
+    const idName = tc ? t("SecretId") : aws ? t("Access key ID") : t("AccessKey ID"), secretName = tc ? t("SecretKey") : aws ? t("Secret access key") : t("Secret Access Key");
     if (draft.accessKeyID === undefined) draft.accessKeyID = access.id || "";
     const ak = input(draft.accessKeyID, idName);
     ak.classList.add("volc-ak");
@@ -10265,20 +10290,28 @@ function drawEditor(p, presetID) {
     if (saved) {
       const side = el("div", "side");
       const drop = el("button", "text", t("Remove"));
-      drop.onclick = () => { draft.clearAccessKey = true; draft.accessKeyID = ""; draft.secretAccessKey = ""; ak.value = ""; sk.value = ""; sk.placeholder = secretName; drop.remove(); };
+      drop.onclick = () => { draft.clearAccessKey = true; draft.accessKeyID = ""; draft.secretAccessKey = ""; draft.sessionToken = ""; ak.value = ""; sk.value = ""; sk.placeholder = secretName; drop.remove(); dropToken(); };
       side.append(drop);
       pair.append(side);
     }
+    // a temporary AWS key's session token, under the Secret (awstoken.js)
+    let dropToken = () => {};
     const rows = [
       // what a RAM user's key needs (aliRAMHint, MetalHqa on X)
       ...field(idName, ak, access.vendor === "alibaba" ? t(ALI_RAM) : ""),
-      ...field(secretName, pair, tc
+      ...field(secretName, pair, aws
+        ? t("In place of the API key: an AWS access key that may call Bedrock, which signs each request. A temporary key needs its session token too.")
+        : tc
         ? t("Token Plan Enterprise's usage is told only to the Tencent Cloud account's API key (console → Access management → API keys), not to the plan's API key. Give its SecretId and SecretKey here for the Usage page to show it; a sub-user's key that may read TokenHub is enough. It is used for nothing else.")
         : access.vendor === "alibaba"
         ? t("The plan's usage is told only to the Alibaba Cloud account's AccessKey (console → AccessKey), not to the plan's API key. Give its AccessKey ID and Secret here for the Usage page to show it. It is used for nothing else.")
         : t("The plan's 5-hour, weekly and monthly windows are told only to the account's access key (Volcengine console → API Access Keys), not to the plan's API key. Give it here for the Usage page to show them; it is used for nothing else.")),
     ];
-    ed.append(...rows);
+    // rarely used beside the API key: at the top of Advanced (#7687)
+    if (aws) {
+      advIn.prepend(...rows);
+      import("./awstoken.js").then(() => { dropToken = awsToken(rows.at(-1), access, draft); }, () => {});
+    } else ed.append(...rows);
     // the plan at some regions only (Tencent's 企业版)
     const at = pr?.accessKeyRegions;
     if (at?.length) {
@@ -10618,7 +10651,11 @@ function drawEditor(p, presetID) {
       body.accessKeyID = draft.accessKeyID || "";
       if (draft.secretAccessKey) body.secretAccessKey = draft.secretAccessKey;
       else if (draft.clearAccessKey) body.clearAccessKey = true;
-      if (accessShown() && body.accessKeyID && !body.secretAccessKey && !(access.secretSet && !draft.clearAccessKey)) { ed.querySelector(".volc-sk")?.focus(NO_SCROLL); return editorError(t("Give the access key's Secret too"), "warn"); }
+      if (aws) {
+        if (draft.sessionToken) body.sessionToken = draft.sessionToken;
+        else if (draft.clearSessionToken) body.clearSessionToken = true;
+      }
+      if (accessShown() && body.accessKeyID && !body.secretAccessKey && !(access.secretSet && !draft.clearAccessKey)) { if (aws) adv.open = true; ed.querySelector(".volc-sk")?.focus(NO_SCROLL); return editorError(t("Give the access key's Secret too"), "warn"); }
     }
     if (vertex) body.vertex = vertexOfDraft();
     if (isNew && custom && !body.name) { name.focus(); return editorError(t("Give it a name"), "warn"); }
@@ -10635,7 +10672,7 @@ function drawEditor(p, presetID) {
     if (picked === false) return pickError();
     saving(saveBtn, t(isNew ? "Adding…" : "Saving…"));
     const okMsg = t(isNew ? "{name} added" : "{name} saved", { name: draft.name || draft.id });
-    saveAccountModelsDraft(picked).then(() => providerAction("save", body, okMsg), (e) => { doneSaving(saveBtn); editorError(e.message || String(e)); });
+    saveAccountModelsDraft(picked).then(() => self.saveGatewayKeys?.(p)).then(() => providerAction("save", body, okMsg), (e) => { doneSaving(saveBtn); editorError(e.message || String(e)); });
   };
   saveBtn.onclick = save;
   bar.append(cancel, saveBtn);
@@ -11284,11 +11321,12 @@ function addFormModels(ex) {
       const r = await api("provider/list", body);
       listed = r?.models || [];
       out.replaceChildren();
-      if (!listed.length) { out.append(el("span", "hint", t(r?.retrieval ? emptyModelsHint(r) : "The vendor's list is empty. Type the model ids instead."))); return; }
+      const rr = retrievalRows(r, 1);
+      if (!listed.length) { out.append(...rr[0] ? rr : [el("span", "hint", t("The vendor's list is empty. Type the model ids instead."))]); return; }
       q.placeholder = t("filter {n} models…", { n: listed.length });
       // the picks' count and Pick all / none above the chips: they stay put
       if (listed.length > 24) out.append(q);
-      out.append(acts, chips);
+      out.append(acts, chips, ...rr);
       draw();
     } catch (err) { out.replaceChildren(el("span", "hint err", err.message)); }
     finally { go.classList.remove("busy"); }
@@ -11539,7 +11577,7 @@ let picksLeft = null;
 const MCHIPS_MAX = 240;
 // emptyModelsHint: an empty list's words; Azure's is its deployments (#1995)
 function emptyModelsHint(p) {
-  if (p.retrieval) return "Only embedding and rerank models are listed. They need no pick: ask them on /v1/embeddings and /v1/rerank.";
+  if (p.retrieval) return "No models to chat with: its embedding and rerank models are below.";
   if (p.preset !== "azure") return "The vendor's list is empty. Fetch models again, or type a model id.";
   if (providers?.fetching && !p.fetched && !p.listError) return "Asking your resource for its deployments with this key…";
   return "No deployments came back for this key. Fetch models again, or type a deployment's name as a model id.";
@@ -12420,14 +12458,14 @@ function renderVideomakers(p) {
 
 // retrievalRows: its embedding and rerank models, which need no pick and
 // aren't among its models since agents don't chat with them: they were
-// nowhere to be seen (@rfiacne on X)
-function retrievalRows(p) {
-  return [["Embedding models", p?.embedIds], ["Rerank models", p?.rerankIds]].flatMap(([l, v]) => {
-    if (!v) return [];
-    const d = el("div", "mchips still");
-    d.append(...v.map((id) => el("span", "mchip", id)));
-    return field(t(l), d);
-  });
+// nowhere to be seen (@rfiacne on X). Each kind with the path it is asked
+// on, drawn by retrievalrows.js; inline in the add form's Fetch models,
+// where a count alone read as no models (solider1394 on X)
+function retrievalRows(p, inline, at = el("span")) {
+  if (!p?.embedIds && !p?.rerankIds) return [];
+  at.hidden = 1;
+  import("./retrievalrows.js").then(() => at.isConnected && at.replaceWith(...retrievalField(p, inline)), () => {});
+  return [at];
 }
 
 function mediaChips(cls, ids, key, p, names) {
@@ -12614,7 +12652,7 @@ function renderRouting(p) {
     // in turn and by weight go round already
     kLabel.hidden = kWrap.hidden = routingNow() === "rotate" || routingNow() === "weight";
     // each key's or account's weight shows beside it while by weight
-    for (const l of document.querySelectorAll(".accts")) if (l.dataset.provider === p.id) l.classList.toggle("weighted", routingNow() === "weight");
+    for (const l of document.querySelectorAll(".accts")) if (l.dataset.provider === p.id) l.classList.toggle("weighted", routingNow() === "weight"), l.onrouting?.();
   };
   const rPick = routingSegs(routingsOf(p).map(([id, name, , js]) => [id, ROUTINGS.some((r) => r[0] === id) ? t(name) : name, , js]), routingNow(), (routing) => { draft.routing = routing; drawRouting(); });
   const rRow = el("div", "route-pick");
@@ -13848,6 +13886,10 @@ function renderAccounts(a, p) {
     } else if (l.active) {
       const using = el("span", "using", l.paused ? t("Paused") : back ? t("First for now") : several ? t("First") : t("In use"));
       if (back && !l.paused) using.title = t("{user} was nearly used up, so magpie signed {agent} in to this one; it goes back to {user} once that has room again", { user: back.user, agent: a.agentName });
+      // By weight it is only the one signed in to: the weights share the
+      // conversations out, not the order (Wing8Aqua on X read First as the
+      // account used most); drawRouting tells it the routing picked now
+      else if (several && !l.paused) (list.onrouting = () => { const w = list.matches(".weighted"); using.textContent = t(w ? "Signed in" : "First"); w ? using.title = t("By weight, each new conversation goes to an account by its weight and stays there") : using.removeAttribute("title"); })();
       line.append(using);
       if (a.agent === "qoder" || a.agent === "qoder-cn" || l.own) {
         line.append(forgetOf(l.own));
@@ -16341,7 +16383,7 @@ const dayOfKey = (k) => new Date(k + "T12:00:00");
 // Settings' 万/亿 units (chineseUnits), 億 and 萬 in Traditional — every
 // count on the Usage page and in the panel, tokens or requests, says it
 // this one way
-let chineseUnits = false;
+let chineseUnits = false, inUncached = false;
 function fmtN(n) {
   if ((locale === "zh" || locale === "zh-TW") && chineseUnits) {
     const tw = locale === "zh-TW";
@@ -16596,6 +16638,8 @@ function renderQuotas(lazy) {
         }
         box.append(r);
       }
+      // a Claude account at its limit: where its free resets are used
+      if (!brief && !history) box.append(claudeResets(sub, "quota-resets", "text"));
       // the account's standing say on its resets, held or not (#719)
       const policy = !brief && !history && autoResetRow(sub, "quota-autoreset");
       if (policy) box.append(policy);
@@ -18138,6 +18182,7 @@ function panelQuotaCard(q, first = false) {
     }
     card.append(r);
   }
+  card.append(claudeResets(q, "pq-resets", "pq-use"));
   const policy = autoResetRow(q, "pq-autoreset");
   const credits = creditsRow(q, "pq-credits");
   if (policy || credits) {
@@ -18234,6 +18279,22 @@ function resetsEach(r) {
 function codexResetCard(q) {
   if (!q.resets || q.resets.byWindow) return false;
   return q.provider === "codex" || !!(q.from && q.user && /^[^/]+\/codex$/.test(q.provider || ""));
+}
+
+// Claude's limit resets (support.claude.com/en/articles/17007452) are
+// free, given now and then to some plans, and used only in claude.ai's
+// Settings › Usage, on the web, the desktop or the mobile apps, never from
+// Claude Code. (Claude Code's hidden /limit-reset is a trial behind
+// Anthropic's own flags, and magpie never asks Anthropic itself with a
+// Claude sign-in.) A Claude card at a used-up limit opens that page; any
+// other card has "" (ahz2ygnhjmIJ0E0 on X: "cc有reset的功能，magpie能接入吗").
+function claudeResets(q, c, b) {
+  if (q.error || !/^([^/]+\/)?claude$/.test(q.provider) || !q.windows?.some((w) => !w.text && !w.lane && w.used >= 100)) return "";
+  const r = el("div", c + " claude-resets"), go = el("button", b, t("Open ↗"));
+  r.append(el("span", "", t("Limit resets are used on claude.ai")), go);
+  go.title = t("Claude gives some plans a free limit reset now and then. Use it in Settings › Usage on claude.ai, signed in as this account.");
+  go.onclick = (e) => { e.stopPropagation(); api("open", { url: "https://claude.ai/settings/usage" }).catch(() => {}); };
+  return r;
 }
 
 // resetUseTitle: a use spends the one that runs out first
@@ -19860,8 +19921,10 @@ function applyPrefs(s, rate) {
     yuanProviders = yuan;
     costs = true;
   }
-  if (chineseUnits !== !!s.chineseUnits) {
+  // and Requests' In, with or without the cache (inUncached)
+  if (chineseUnits !== !!s.chineseUnits || inUncached !== !!s.inUncached) {
     chineseUnits = !!s.chineseUnits;
+    inUncached = !!s.inUncached;
     costs = true;
   }
   // the panel's Usage tab too, whenever drawn: its read can beat the state (dLdgKyRd)
@@ -20872,6 +20935,8 @@ function renderTrayUsage(s, keep) {
   $("#unitsRow").hidden = locale !== "zh" && locale !== "zh-TW";
   $("#unitsSegs").replaceChildren(segs([[false, t("K / M / B")], [true, t("万 / 亿")]], !!s.chineseUnits,
     (v) => savePrefs({ ...keep, chineseUnits: v })));
+  $("#inUncachedSegs").replaceChildren(segsOO(s.inUncached, (v) => savePrefs({ ...keep, inUncached: v })));
+  if (s.inUncached) $("#usageMore").open = true;
   $("#dayStartSegs").replaceChildren(segs([...Array(7).keys()].map((h) => [h, h + ":00"]), s.dayStart || 0, (v) => savePrefs({ ...keep, dayStart: v })));
   renderAlerts(s, keep);
   $("#plainNamesSegs").replaceChildren(suffixSegs());
@@ -22229,13 +22294,13 @@ function privacyModelRow(box, why) {
     if (!r.isConnected) return;
     const who = el("div", "who"), val = el("div", "val");
     who.append(name(), el("div", m && (m.on || m.installed || !m.supported || pmBusy(m) || m.error || m.models?.some((x) => x.error)) ? "sub say" : "sub", pmSub(m)));
-    if (m?.supported || m?.installed) {
+    if (m?.supported || m?.installed || m?.managedWeights === false) {
       if (m.models?.length > 1) val.append(pmPick(m, (id) => act("pick", id)));
       if (pmBusy(m)) {
         const c = el("button", "text", t("Cancel"));
         c.onclick = () => act("cancel");
         val.append(c);
-      } else if (m.installed && !m.on) {
+      } else if (m.installed && !m.on && m.managedWeights !== false) {
         const x = el("button", "text", t("Delete model"));
         x.onclick = async () => {
           if (await confirmAction(t("Delete the model?"), t("Turning it on again downloads {size} again.", { size: fmtBytes(m.size) }), t("Delete"))) act("remove");
@@ -22274,12 +22339,11 @@ function pmPick(m, pick) {
   b.type = "button";
   menuOpener(b);
   b.title = t("The local model");
-  b.append(el("span", "", (PM_MODELS[m.model] || [m.model])[0]), svg(CHEV, 11, 1.6));
+  b.append(el("span", "", m.name || (PM_MODELS[m.model] || [m.model])[0]), svg(CHEV, 11, 1.6));
   b.onclick = (e) => {
     e.stopPropagation();
     if (b.classList.contains("open")) return closeProtoMenu();
-    const opts = (m.models || []).map((x) => ({ v: x.model, name: (PM_MODELS[x.model] || [x.model])[0], literalName: true,
-      note: !x.supported && !x.installed ? t("Not available on this system yet") : t(PM_MODELS[x.model]?.[1] || "") + " · " + fmtBytes(x.size) + (x.installed ? " · " + t("downloaded") : "") }));
+    const opts = (m.models || []).map(pmModelOption);
     openProtoMenu(b, opts, m.model, (v) => v !== m.model && pick(v), "The local model", "sess-menu", "right");
   };
   return b;
@@ -22307,6 +22371,8 @@ function pmScore(m, pick) {
 function pmSub(m) {
   const about = t("Names, addresses and passwords no rule can find, found by a model that runs on this computer");
   if (!m) return about;
+  // a plugin's model (pii/external.go): its files are the user's
+  if (m.managedWeights === false && !m.installed) return t("Not available: its plugin is off, or its files are gone");
   if (!m.supported && !m.installed) return t("Not available on this system yet");
   const d = pmBusy(m);
   if (d) return t("Downloading the model: {done} of {total}", { done: fmtBytes(d.done), total: fmtBytes(d.total) });
@@ -23006,7 +23072,7 @@ function prefsKeep(s) {
     replyModel: s.replyModel || "", noLoopGuard: !!s.noLoopGuard, claudeLeanPrompt: !!s.claudeLeanPrompt, claudeNoExtraUsage: !!s.claudeNoExtraUsage, claudeRegionHold: !!s.claudeRegionHold, claudePrintMode: !!s.claudePrintMode, refusalRetries: s.refusalRetries ?? null, retryAfterCap: s.retryAfterCap ?? null,
     noUpdatePill: !!s.noUpdatePill, noAutoUpdate: !!s.noAutoUpdate, updateEvery: s.updateEvery || 360, autoRestart: !!s.autoRestart, noAutoDownload: !!s.noAutoDownload, updateChannel: s.updateChannel || "",
     trayUsage: s.trayUsage || "", trayUsageEvery: s.trayUsageEvery || 3, trayNoLogos: !!s.trayNoLogos, trayAnthropicMark: !!s.trayAnthropicMark, trayNoBird: !!s.trayNoBird, trayNoNumber: !!s.trayNoNumber, trayPace: !!s.trayPace, trayNoCost: !!s.trayNoCost, trayWindows: s.trayWindows || {}, vision: s.vision || "", visionEffort: s.visionEffort || "", searcherEffort: s.searcherEffort || "", imageGen: s.imageGen || "", videoGen: s.videoGen || "", imageTimeout: s.imageTimeout || 0, classifyTimeout: s.classifyTimeout || 0, searcher: s.searcher || "", searchFirst: s.searchFirst || "", currency: s.currency || "usd", totalCurrency: s.totalCurrency || "", trayCurrency: s.trayCurrency || "",
-    chineseUnits: !!s.chineseUnits, dayStart: s.dayStart || 0, usageAlert: s.usageAlert || 0, balanceAlert: s.balanceAlert || 0, resetReminder: s.resetReminder || 0,
+    chineseUnits: !!s.chineseUnits, inUncached: !!s.inUncached, dayStart: s.dayStart || 0, usageAlert: s.usageAlert || 0, balanceAlert: s.balanceAlert || 0, resetReminder: s.resetReminder || 0,
     turnDoneAlert: s.turnDoneAlert || 0, maskAlert: !!s.maskAlert };
 }
 
@@ -23926,10 +23992,10 @@ document.fonts?.ready.then(fitTop);
 // a font picked later (Settings' Font) can still be loading when it's applied
 document.fonts?.addEventListener("loadingdone", fitTop);
 
-// the shown page's tab; Routing's for its groups in the header's row,
-// which has no room for theirs (app.css)
+// the shown page's tab; in the header's row, which has no room for theirs
+// (app.css), Routing's for its groups and Library's for Artifacts
 function markNav(v) {
-  const tab = v === "groups" && !sideNav() ? "routing" : v;
+  const tab = sideNav() ? v : { groups: "routing", artifacts: "library" }[v] || v;
   for (const b of $("#nav").querySelectorAll("button[data-view]")) {
     const on = b.dataset.view === tab;
     b.classList.toggle("on", on);

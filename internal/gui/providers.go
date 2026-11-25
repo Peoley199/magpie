@@ -573,6 +573,9 @@ type accessKeyJSON struct {
 	Vendor    string `json:"vendor"`
 	ID        string `json:"id"`
 	SecretSet bool   `json:"secretSet"`
+	// TokenSet is that an AWS access key has a session token saved, which
+	// is never sent here either
+	TokenSet bool `json:"tokenSet,omitempty"`
 }
 
 // presetAccessKey is whose account access key a preset's plans are read
@@ -1086,7 +1089,7 @@ func providerInfoWith(p provider.Provider, ls provider.Listing, agents []agentUs
 		vendor, _ = presetAccessKey(*pr)
 	}
 	if vendor != "" || p.AccessKeyID != "" || p.SecretAccessKey != "" {
-		out.AccessKey = &accessKeyJSON{Vendor: vendor, ID: p.AccessKeyID, SecretSet: p.SecretAccessKey != ""}
+		out.AccessKey = &accessKeyJSON{Vendor: vendor, ID: p.AccessKeyID, SecretSet: p.SecretAccessKey != "", TokenSet: p.SessionToken != ""}
 	}
 	if p.IsVertex() {
 		out.Vertex = &provider.Vertex{}
@@ -2075,6 +2078,10 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			// when sent blank, unless ClearAccessKey drops it.
 			AccessKeyID    *string `json:"accessKeyID"`
 			ClearAccessKey bool    `json:"clearAccessKey"`
+			// ClearSessionToken drops an AWS access key's session token
+			// (SessionToken), which a blank one keeps while the key's ID
+			// is the same (#7687)
+			ClearSessionToken bool `json:"clearSessionToken"`
 			// From is the id the provider had: another is a rename
 			From string `json:"from"`
 			// LibraryMCP, on a Remote magpie, is its editor's switch: its
@@ -2348,6 +2355,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				pr.ReplyHeaders = in.ReplyHeaders
 				pr.PassHeaders = in.PassHeaders
 				pr.SecretAccessKey = in.SecretAccessKey
+				pr.SessionToken = in.SessionToken
 				pr.Vertex = in.Vertex
 				pr.Searches = in.Searches
 				pr.PinUpstream = in.PinUpstream
@@ -2494,6 +2502,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				in.AccessKeyID = strings.TrimSpace(*req.AccessKeyID)
 			}
 			in.SecretAccessKey = strings.TrimSpace(in.SecretAccessKey)
+			in.SessionToken = strings.TrimSpace(in.SessionToken)
 			var old *provider.Provider
 			if req.New && in.NativeCompaction && !in.CarriesCompaction() {
 				fail(rw, fmt.Errorf("%s can't carry Codex's native compaction: only a provider with a Responses API, a ChatGPT account or GitHub Copilot can", cmp.Or(in.Name, in.ID)))
@@ -2745,6 +2754,12 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				if in.SecretAccessKey == "" && old != nil && !req.ClearAccessKey {
 					in.SecretAccessKey = old.SecretAccessKey
 				}
+				// an AWS access key's session token likewise, while the
+				// key is the one it was given with: another key's would
+				// only get its requests refused (#7687)
+				if in.SessionToken == "" && old != nil && !req.ClearAccessKey && !req.ClearSessionToken && in.AccessKeyID == old.AccessKeyID {
+					in.SessionToken = old.SessionToken
+				}
 				// and a Vertex AI provider's project and credentials
 				if in.Vertex == nil && old != nil {
 					in.Vertex = old.Vertex
@@ -2837,6 +2852,16 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 						return
 					}
 					in.ID = to
+				}
+			}
+			// the models ticked here that weren't before are ticked for the
+			// agents shown only their picks that take a provider's in
+			// (eiyuuzaki2333 on X), so a model isn't ticked twice; before
+			// the list is fetched, so a model its vendor adds stays out
+			if p, err := provider.Find(in.ID); err == nil {
+				if _, err := provider.JoinPicks(*p, old); err != nil {
+					fail(rw, err)
+					return
 				}
 			}
 			if len(moreKeys) > 0 {
@@ -3387,14 +3412,19 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				out = append(out, x)
 			}
 			// embedding and rerank models need no pick: they are served
-			// on /v1/embeddings and /v1/rerank as listed (heatonz)
-			retrieval := 0
+			// on /v1/embeddings and /v1/rerank as listed (heatonz), and
+			// the form lists them by kind, as a saved provider's editor
+			// does (solider1394 on X: a count alone read as no models)
+			var embed, rerank []string
 			for _, m := range all {
-				if m.Serves == catalog.ServesEmbedding || m.Serves == catalog.ServesRerank {
-					retrieval++
+				switch m.Serves {
+				case catalog.ServesEmbedding:
+					embed = append(embed, m.ID)
+				case catalog.ServesRerank:
+					rerank = append(rerank, m.ID)
 				}
 			}
-			writeJSON(rw, map[string]any{"models": out, "retrieval": retrieval})
+			writeJSON(rw, map[string]any{"models": out, "embedIds": embed, "rerankIds": rerank})
 			return
 		case "models":
 			p, err := provider.Find(in.ID)
@@ -3885,6 +3915,33 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			return
 		}
 		writeProvidersJSON(rw, providersState())
+	})
+	// a Mistral Vibe plan's key: a sign-in to Mistral in the user's
+	// browser, as Vibe's own, traded for the key the editor then saves
+	mux.HandleFunc("POST /api/mistral/signin", func(rw http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+		defer cancel()
+		id, u, err := provider.StartMistralSignIn(ctx)
+		if err != nil {
+			fail(rw, err)
+			return
+		}
+		writeJSON(rw, struct {
+			ID  string `json:"id"`
+			URL string `json:"url"`
+		}{id, u})
+	})
+	mux.HandleFunc("GET /api/mistral/signin/{id}", func(rw http.ResponseWriter, r *http.Request) {
+		state, why, key := provider.MistralSignInState(r.PathValue("id"))
+		writeJSON(rw, struct {
+			State string `json:"state"`
+			Error string `json:"error,omitempty"`
+			Key   string `json:"key,omitempty"`
+		}{state, why, key})
+	})
+	mux.HandleFunc("POST /api/mistral/signin/{id}/cancel", func(rw http.ResponseWriter, r *http.Request) {
+		provider.CancelMistralSignIn(r.PathValue("id"))
+		rw.WriteHeader(http.StatusNoContent)
 	})
 	// the Qwen AI platform's Token Plan windows: a sign-in to the
 	// platform, approved in the user's browser, the provider's own

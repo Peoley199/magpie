@@ -3,11 +3,13 @@ package gui
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -47,12 +49,14 @@ type subagentModel struct {
 	Name  string `json:"name"`
 	Note  string `json:"note,omitempty"`
 	Group bool   `json:"group,omitempty"`
+	// Efforts are the efforts Codex runs it at, when the catalog knows
+	Efforts []string `json:"efforts,omitempty"`
 }
 
 func subagentModels() []subagentModel {
 	out := []subagentModel{}
 	for _, e := range provider.CodexSubagentModels() {
-		m := subagentModel{ID: e.ID, Name: e.Name, Note: e.Provider.Name, Group: e.Group != ""}
+		m := subagentModel{ID: e.ID, Name: e.Name, Note: e.Provider.Name, Group: e.Group != "", Efforts: e.Efforts}
 		if a := e.Provider.Account; a != nil && a.User != "" {
 			m.Note = a.User
 		}
@@ -62,6 +66,30 @@ func subagentModels() []subagentModel {
 		out = append(out, m)
 	}
 	return out
+}
+
+// codexSubagentEffort refuses an effort the model a Codex subagent runs
+// on lacks, its own or the one the Agents page puts Codex's subagents on:
+// Codex refuses to start a subagent at one (the Agents page's subagent
+// effort is held to the same). With neither, the lead picks the model,
+// and any effort goes.
+func codexSubagentEffort(s library.Subagent) error {
+	if s.Effort == "" || !slices.ContainsFunc(s.Agents, func(a string) bool { return a == "codex" || strings.HasPrefix(a, "codex@") }) {
+		return nil
+	}
+	m := strings.TrimSpace(s.Model)
+	if m == "" {
+		m = provider.CodexSubagentModel()
+	}
+	if m == "" {
+		return nil
+	}
+	for _, e := range subagentModels() {
+		if e.ID == m && len(e.Efforts) > 0 && !slices.Contains(e.Efforts, strings.ToLower(strings.TrimSpace(s.Effort))) {
+			return fmt.Errorf("Codex runs %s at %s, not %s: it would refuse to start this subagent", e.Name, strings.Join(e.Efforts, ", "), s.Effort)
+		}
+	}
+	return nil
 }
 
 func libraryView(res *library.Result) (libraryJSON, error) { return libraryRead(res, false) }
@@ -359,6 +387,16 @@ func libraryRoutes(mux *http.ServeMux, w Windows) {
 	// is opened, not part of the polled /api/library.
 	mux.HandleFunc("GET /api/library/native", func(rw http.ResponseWriter, r *http.Request) {
 		writeJSON(rw, library.ReadNative())
+	})
+	// A plugin's release pin and its repository's newer stable tags
+	// (#7549), asked for when its detail opens: git ls-remote, not polled.
+	mux.HandleFunc("GET /api/library/plugin-tags", func(rw http.ResponseWriter, r *http.Request) {
+		v, err := library.PluginTags(r.URL.Query().Get("name"))
+		if err != nil {
+			fail(rw, err)
+			return
+		}
+		writeJSON(rw, v)
 	})
 	mux.HandleFunc("POST /api/library/pi", func(rw http.ResponseWriter, r *http.Request) {
 		var in struct {
@@ -758,6 +796,7 @@ func libraryRoutes(mux *http.ServeMux, w Windows) {
 			Keep     bool              // a project removed keeps what magpie put in it
 			On       bool              // every skill or server given to the agents, or taken from them
 			How      string            // link or copy: how skills are given to Agent, or to every agent with none (#896)
+			Tag      string            // the release tag a pinned plugin is upgraded to (plugins/upgrade, #7549)
 			// Replace updates a skill changed here all the same, its
 			// changed version kept with the backups (#1449)
 			Replace bool
@@ -789,6 +828,10 @@ func libraryRoutes(mux *http.ServeMux, w Windows) {
 		case "servers/hub":
 			// magpie as the agents' one MCP server (#2679)
 			res, err = library.SetMCPHub(in.On)
+		case "servers/router":
+			// one server through the router or each agent's own entry,
+			// from its row (MetalHqa on X), as its editor's switch saves
+			res, err = library.ServerHub(in.Name, !in.On)
 		case "servers/hub-note":
 			// what the router says of itself to the agents, this
 			// computer's own (settings.RouterNote)
@@ -861,10 +904,14 @@ func libraryRoutes(mux *http.ServeMux, w Windows) {
 			res, err = library.PluginOn(in.Name, in.On)
 		case "plugins/update":
 			res, err = library.UpdatePlugin(in.Name)
+		case "plugins/upgrade":
+			res, err = library.UpgradePlugin(in.Name, in.Tag)
 		case "plugins/remove":
 			res, err = library.RemovePlugin(in.Name)
 		case "subagents/save":
-			res, err = library.SaveSubagent(in.Old, in.Subagent)
+			if err = codexSubagentEffort(in.Subagent); err == nil {
+				res, err = library.SaveSubagent(in.Old, in.Subagent)
+			}
 		case "subagents/agents":
 			res, err = library.SubagentAgentsSet(in.Name, in.Agents)
 		case "subagents/remove":
@@ -1001,6 +1048,8 @@ func libraryRoutes(mux *http.ServeMux, w Windows) {
 			res, err = library.ProjectSkillsOff(in.Dir, oneOrMore(in.Name, in.Names), in.Agents)
 		case "projects/copy":
 			res, err = library.ProjectCopy(in.Dir, in.Copy)
+		case "projects/main-only":
+			res, err = library.ProjectMainOnly(in.Dir, in.On)
 		case "projects/instructions":
 			// the text, the agents (sent as [] for none), or both
 			c := library.ProjectInstr{Text: in.Instr}

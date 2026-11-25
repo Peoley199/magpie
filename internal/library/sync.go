@@ -115,6 +115,11 @@ func syncSteps(all, gone []*Target, b *backups, res *Result) []func(*Library) {
 	steps := []func(*Library){func(l *Library) { l.followMovedSkills(); l.markDangling(); l.followSubagentFiles() }}
 	for _, t := range all {
 		steps = append(steps, func(l *Library) {
+			if claudeCode(t) {
+				// a plugin Claude Code loads itself isn't given it again
+				// (claude_native_overlap.go)
+				defer l.claudeAside()()
+			}
 			l.syncInstructions(t, all, b, res, true)
 			l.syncMCP(t, b, res)
 			l.syncHooks(t, b, res)
@@ -149,7 +154,12 @@ func syncSteps(all, gone []*Target, b *backups, res *Result) []func(*Library) {
 					steps = append(steps, func(l *Library) { l.syncDesktopSkills(t, res) })
 				}
 			case (t.Skills != "" && realDir(t.Skills) == shared) == first:
-				steps = append(steps, func(l *Library) { l.syncSkills(t, res, all) })
+				steps = append(steps, func(l *Library) {
+					if claudeCode(t) {
+						defer l.claudeAside()()
+					}
+					l.syncSkills(t, res, all)
+				})
 			}
 		}
 	}
@@ -681,6 +691,27 @@ func readView(problems []Problem, glance bool) (*View, error) {
 				return nil, err
 			}
 			problems = append(slices.Clone(problems), res.Problems...)
+			forget = readParts()
+		}
+	}
+	// a skill folder copied into the library's own by hand is listed
+	// (skill_adopt.go, jwaitq on Discord). Not on a glance: bringing one
+	// in reads the agents' skill folders through, which a glance never
+	// waits on (#541); the read after it brings it in
+	if !glance {
+		if adopted, given := l.adoptLibraryFolders(); len(adopted) > 0 {
+			forget()
+			forget = func() {}
+			if err := l.save(); err != nil {
+				return nil, err
+			}
+			if given {
+				res := l.sync()
+				if err := l.save(); err != nil {
+					return nil, err
+				}
+				problems = append(slices.Clone(problems), res.Problems...)
+			}
 			forget = readParts()
 		}
 	}
