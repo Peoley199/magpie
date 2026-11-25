@@ -1,9 +1,9 @@
 # Fork 同步与构建手册（Peoley199/magpie）
 
 本 fork 的上游是 `yetone/magpie`（remote 名 `upstream`），fork 自己的改动长期保留在上游之外。
-本文是 2026-10-30／10-31／11-01／11-05／11-06／11-07／11-11／11-12／11-16／11-22 几轮同步（7499ebb5→cd10dfbe 700 提交、
+本文是 2026-10-30／10-31／11-01／11-05／11-06／11-07／11-11／11-12／11-16／11-22／11-25 几轮同步（7499ebb5→cd10dfbe 700 提交、
 →cdf8151a 40、→ffa07395 4、→f7f2d75f 149、→380032cda 11、→854fc8161 237、→6abacd46c 827、
-→84ad780b6 110、→665b9aff1 180、→db0f2f20d 554、→2bb201162 288、→f9807c5e8 766、→8df7885d4 5、→700f4127e 541）
+→84ad780b6 110、→665b9aff1 180、→db0f2f20d 554、→2bb201162 288、→f9807c5e8 766、→8df7885d4 5、→700f4127e 541、→e6f4af3f9 133）
 沉淀的操作手册，配套两个脚本：
 
 - `scripts/fork-sync.sh` — 调查→方案→合并→验证→（推送）→构建，一条命令跑完；
@@ -388,6 +388,61 @@ fork 的网关测试（含 `TestAllCompile`）全绿。
 
 **推送**：`git push origin main` fast-forward（`9130fe2d4..6909d1b49`），默认 ssh 通道一次成功。
 
+### 11-25（v0.1.4676→v0.1.4777，**133 提交**；19 包 150 红，0 回归）
+
+**拉取**：HTTPS + 本机代理这次一次拉完（~60 秒，未触发 11-22 记的掐断；远端真实头先
+`git ls-remote upstream refs/heads/main` 核对为 `e6f4af3f9`）。`fork-sync.sh` 调查模式：
+upstream 领先 133、fork 领先 41，文件重叠 `docs/subsystems/gateway-routing.md`、
+`docs/subsystems/provider-plugins.md`、`internal/gateway/gateway.go`，指纹
+（`zcodeStartPlan`／`zcodeWorkDir`）上游侧仍然一个都没有。
+
+**合并**：无冲突，合并头 `22930db90`。上游又改了 fork 拥有的 `anthropic_shapes.go`、
+`gateway.go`、`workdir.go`、`workdir_test.go` 与两份子系统文档，都自动合并成功。
+合并后逐项复核指纹：`zcodeWorkDir` 仍在 `callerForms` 与 `turnForms` 的
+`<system-reminder>` 作用域里（`workdir.go:73,88`），`workPlace` 仍读 `ToolResult`
+（`workdir.go:122`），`zcodeStartPlan` 调用点仍在 `gateway.go:6996` 的 forwardOnce 里，
+`systemTextOf`／`withoutZCodeSystem` 都在。`go build ./...`、`gofmt -l .`（干净）、
+`go vet ./...`、fork 的网关测试全绿。
+
+**本轮起改用"纯上游树复现"做回归判据**，不再跑 `fork-suite-compare.sh`（它上轮起会卡在
+多包基线重跑）：`git worktree add /tmp/up upstream/main`，把套件里的失败包在纯上游树上
+重跑同一组测试。凡纯上游同样红、或该包与上游**逐字节相同**（`git diff --quiet
+upstream/main..HEAD -- <pkg>`，本轮 20 个失败包里 19 个如此，fork 只改
+`internal/gateway`）→ 与 fork 无关；剩下的才是真候选。这条判据比签名对照更硬，
+也比跑整包基线快得多。
+
+20 个失败包里 19 个与上游逐字节相同，`internal/gateway` 的 18 个红也全部在纯上游
+`e6f4af3f9` 上以相同签名复现：
+
+| 测试 | 签名 |
+| --- | --- |
+| `TestClaudeAsRootEnv` | `want [… "IS_SANDBOX=1"]`：断言 Linux 行为 |
+| `TestSweepBridgeProjectsTakesOnlyTheBridgesFolders` | `symlink …: A required privilege is not held by the client` |
+| `TestHandedOverGatewayFinishesItsStream` 等 5 个 handover | `file tcp 127.0.0.1:…: A device attached to the system is not functioning`（Windows loopback 文件句柄） |
+| `TestHubRootsOfACodexThread` | `called for {Roots:[] …}`（`/work/repo` 在 Windows 不是绝对路径） |
+| `TestArtifactPageStore` 等 4 个 artifact | `TempDir RemoveAll … data.db: The process cannot access the file`（Windows 文件锁） |
+| `TestOpenAIProviderTurnsGoOverWebSocketByDefault`、`TestOpenAIProviderSocketOffNeverDials` | **真实请求到 api.openai.com**：`401 … Incorrect API key provided: sk-oai`（带 request id）——`Resolve` 的假上游在这两例里没生效，测试会触网，上游测试隔离缺陷 |
+| `TestRelay*` 4 个 socket | `200, a reply without its end: : keepalive`（固定等待 80s/244s；Windows 上 relay 的回复流不结束） |
+
+`internal/settings` 的 `TestSaveConcurrent`（`284 incomplete-file reads`）是唯一"合并头红、
+纯上游整包跑没红"的，但该包与上游**逐字节相同**且在合并头上单跑整包同样只有
+`TestSharedCheckedReadsOnceAndKnowsUnknown` 一个红——它是满套件负载下读者读到半写文件的
+Windows rename 缺陷，不是新回归。翻转也有两例：`TestRestartWaitsForTheOldWebView`、
+`TestWebViewComesBackFromEachProcessEnd` 只在纯上游树上红，纯负载相关。
+
+其余 19 个失败包的红全部落在与上游逐字节相同的代码里（symlink 权限 / Keychain /
+`git push exit status 0xc0000005` / Bun 1.3.14 对 `git+file:///` 的崩溃 / `%AppData%`
+未定义 / 分配字节上限 / Windows 路径断言 / WSL 未安装）。结果：88 个包 ok、
+19 个包 FAIL、150 个红测试，**0 回归**。
+
+**构建与安装**：`v0.1.4777-44-g22930db90`（117,647,872 字节，PE subsystem=2，
+资源版本 0.1.4777），应用正在跑，改名法装上 `D:\magpie`，旧版留档
+`.bak-v0.1.4676-40-g6909d1b49`。运行中的进程仍服务旧构建，要从托盘退出再启动，
+新版本才接手。
+
+**推送**：`git push origin main` fast-forward（`eb43e7afc..22930db90`），
+默认 ssh 通道一次成功。
+
 ## 四、远端仓库的处理
 
 - **推送**：`git push origin main`，永远是 fast-forward（合并方式保证不改写历史）。禁止 rebase
@@ -430,8 +485,12 @@ fork 的网关测试（含 `TestAllCompile`）全绿。
 - **脏树保护**：工作树有未提交改动时在任何改动前 `STOP`；
 - **指纹守护**：上游若采纳同一修复会 `STOP` 让人决策（10-30 因指纹写错误报过一次，见 §二）。
 
-`fork-suite-compare.sh` 两种输入实跑：预存红 → 判定 "NO new failures" + 签名一致；注入一个假的新
-失败 → 准确列为 "failures NEW on the merge head"。
+`fork-suite-compare.sh` 从 11-12 起就用不上了：它在"3. 同一个包在基线上重跑"会卡住
+（多包 `go test` 的进程长时间无输出）。**11-25 起判回归改用纯上游树复现**——
+`git worktree add /tmp/up upstream/main`，把套件里失败的包在纯上游树上重跑同一组测试
+（命令见 11-25 节），配合"该包是否与上游逐字节相同"（`git diff --quiet
+upstream/main..HEAD -- <pkg>`，0 输出即为相同）。凡满足其一即与 fork 无关。
+用完记得 `git worktree remove --force /tmp/up && git worktree prune`。
 
 注意：脚本用 `set -uo pipefail`（**没有** `set -e`），因为脏树检查那行是
 `grep -q . && die` 形式——去掉 `set -e` 才不会在正常路径上误中止。
