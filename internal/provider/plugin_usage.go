@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -125,7 +126,28 @@ func pluginLoginQuota(ctx context.Context, l Login) SubscriptionQuota {
 	}
 	keepPluginPlan(pp, key, u.Plan)
 	// a wallet's spend counted, for a cap to hold it (#5770)
-	return withWalletSpend(namedModelWindows(quotaOfPlugin(q, u), pp.Models), l.User, time.Now())
+	q = namedModelWindows(quotaOfPlugin(q, u), pp.Models)
+	q = scopePluginWindows(pp.ID, q)
+	return withWalletSpend(q, l.User, time.Now())
+}
+
+// scopePluginWindows scopes the windows a plugin tells without models
+// to what they hold back. Cline's plugin tells ClinePass's 5 hours,
+// Weekly and Month that way, and they hold back cline-pass/ models only,
+// never a cline-free/ one or what the account's credits pay for (#7911).
+// The scope is a Model, not a matches func as the built-in key's
+// (clinePassOnly), because keepLast writes a Model down and keeps no
+// window it can't, so a reading that failed keeps the bar.
+func scopePluginWindows(providerID string, q SubscriptionQuota) SubscriptionQuota {
+	if providerID != "cline" {
+		return q
+	}
+	for i, w := range q.Windows {
+		if w.Model == "" && w.Family == "" && w.Pool == "" && w.matches == nil && !w.Text && !w.Aside {
+			q.Windows[i].Model = clinePassPrefix
+		}
+	}
+	return q
 }
 
 // namedModelWindows scopes each window that says no models but is named
@@ -151,7 +173,7 @@ func namedModelWindows(q SubscriptionQuota, models []plugin.Model) SubscriptionQ
 		}
 		for _, m := range models {
 			if strings.ToLower(m.ID) == name {
-				q.Windows[i].matches = idSetOf([]string{name}).has
+				q.Windows[i].matches, q.Windows[i].models = idSetOf([]string{name}).has, []string{name}
 				break
 			}
 		}
@@ -234,14 +256,23 @@ func quotaOfPlugin(q SubscriptionQuota, u plugin.Usage) SubscriptionQuota {
 		if t, err := time.Parse(time.RFC3339, x.RunsOutAt); err == nil {
 			w.RunsOutAt, w.RunsOut = &t, x.RunsOut
 		}
-		if set := idSetOf(x.Models); set != nil {
-			w.matches = set.has
-		} else if set := idSetOf(x.NotModels); set != nil {
-			w.matches = func(model string) bool { return !set.has(model) }
-		}
+		w.matches, w.models, w.notModels = windowMatches(x.Models, x.NotModels)
 		q.Windows = append(q.Windows, w)
 	}
 	return q
+}
+
+// windowMatches is how a plugin's window that lists models (or the
+// models it doesn't count) matches a model, with the list it went by:
+// nil and none when it lists neither.
+func windowMatches(models, notModels []string) (func(string) bool, []string, []string) {
+	if set := idSetOf(models); set != nil {
+		return set.has, slices.Clone(models), nil
+	}
+	if set := idSetOf(notModels); set != nil {
+		return func(model string) bool { return !set.has(model) }, nil, slices.Clone(notModels)
+	}
+	return nil, nil, nil
 }
 
 // idSet is the models a plugin's window lists (models or notModels), in

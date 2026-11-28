@@ -146,6 +146,9 @@ type Drift struct {
 	// Kind says what is off:
 	//   "unwired"  the model is magpie's but the config no longer sends it
 	//              through magpie (Check);
+	//   "outside"  the config is right, but something beyond it that
+	//              setting it again can't change takes the agent's
+	//              requests elsewhere (Outside);
 	//   "replaced" a magpie model magpie set was replaced by the agent's own;
 	//   "bypassed" the config is right, yet the agent was used since and
 	//              nothing of it reached the gateway — it runs on an old
@@ -228,6 +231,11 @@ func (a *Agent) drift(memo *valueMemo) *Drift {
 	if a.Check != nil {
 		if d := a.Check(); d != "" {
 			return &Drift{Kind: "unwired", Field: on.Key, Now: vals[on.Key], Want: vals[on.Key], Detail: d}
+		}
+	}
+	if a.Outside != nil {
+		if d := a.Outside(); d != "" {
+			return &Drift{Kind: "outside", Field: on.Key, Now: vals[on.Key], Want: vals[on.Key], Detail: d}
 		}
 	}
 	rec := appliedOf(a.ID)
@@ -930,6 +938,11 @@ func (a *Agent) Disconnect() (err error) {
 		return a.Native.Execute(plan)
 	}
 	if !a.Wired() {
+		// nothing of magpie's in its config, but what magpie remembers
+		// setting would still show it changed outside magpie, among those
+		// connected: that goes, as at the end of a Disconnect (Alex on
+		// Discord: Disconnect said done and Nowledge Mem stayed there)
+		a.forgetSetUp()
 		return nil
 	}
 	// the user's say, kept till they connect it again: nothing magpie does
@@ -938,6 +951,8 @@ func (a *Agent) Disconnect() (err error) {
 	stash(map[string]string{a.ID + disconnectedKey: "1"})
 	// the user's own say over a harness Kiro Crew's connect put on
 	kiroCrewUserLeft(a.ID)
+	// and over one Orca runs on
+	orcaUserLeft(a.ID)
 	before, rec := a.Values(), appliedOf(a.ID)
 	if a.Unwire != nil {
 		if err := a.Unwire(); err != nil {

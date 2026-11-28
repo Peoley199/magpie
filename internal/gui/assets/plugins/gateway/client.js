@@ -21,6 +21,9 @@ let connectFolded = true;
 try { connectFolded = localStorage.getItem("magpie.gwConnectFolded") !== "0"; } catch {}
 const expandedCalls = new Set(); // recent-call ids whose wire bodies are open
 const callBodies = new Map(); // callRow → its bodies, read when it is opened (#1521)
+// Show request content as the bodies were read (llxth1 on X): switched
+// in Settings › Privacy, the bodies read before go
+let hidRead = !!prefs?.hideRequestText;
 const wireOpen = new Set(); // recent-call ids whose HTTP headers are open
 // recent calls drawn a page at a time, as many as the plugin's setting
 // says (callsPage)
@@ -33,7 +36,7 @@ function renderGatewayLoading() {
   page.setAttribute("aria-busy", "true");
   $("#connectNote").textContent = "";
   $("#callsNote").textContent = "";
-  $("#copyModels").hidden = true;
+  $("#copyModels").hidden = $("#agentsFor").hidden = true;
 
   const gateway = $("#gateway");
   gateway.replaceChildren();
@@ -86,6 +89,7 @@ function renderGatewayView() {
   if (gatewayKeyDraft === null && gatewayLimit === null && !$("#gatewayKeys .rename-in")) renderGatewayKeys();
   renderConnect();
   renderGatewayModels();
+  readAgentsOff();
   renderActivity();
 }
 
@@ -182,9 +186,14 @@ function gatewayFixSays(o) {
     case "denied": return t("magpie {v} (pid {pid}, {path}) runs as another user or as administrator, so this magpie can't quit it. Quit it there.", p);
     case "stuck": return t("magpie {v} (pid {pid}) didn't quit. End it in your system's process list (Activity Monitor, Task Manager).", p);
     case "respawned": return t("Something started magpie on port {port} again at once ({path}, pid {pid}): a login item or a service keeps it running (a LaunchAgent, a systemd unit, a scheduled task). Remove that, then try again.", p);
+    // Shen Bao on Discord: Windows keeps the port for Hyper-V, WSL or
+    // Docker, and no program has it for netstat to show
+    case "reserved": return t("Windows reserves port {port} for Hyper-V, WSL or Docker. Move the gateway to another port in Settings, or as administrator run net stop winnat, then net start winnat. To check: netsh interface ipv4 show excludedportrange protocol=tcp", p);
     // pluoki on X: Tailscale's serve on the gateway's port number, found
     // only by trial and error; the program is named when it can be read
-    case "taken": return o.tailscale
+    case "taken": return o.reserved
+      ? gatewayFixSays({ ...o, reason: "reserved" })
+      : o.tailscale
       ? t("Tailscale's serve or funnel has port {port}. Point it at magpie from another port: tailscale serve --https={alt} http://127.0.0.1:{port} (or move the gateway to another port in Settings).", p)
       : p.name && !p.path
       ? t("Port {port} is in use by {name} (pid {pid}): quit it, or move the gateway to another port in Settings.", p)
@@ -709,6 +718,20 @@ function renderConnect() {
 }
 
 let modelQuery = "";
+// The models turned off for agents (辰林鸭~ on Discord): left out of every
+// agent's model list, still served through a routing group made of them
+// and to a request that names them. off is their ids, keep the agent set
+// to a model, which keeps it listed (as its own list does); null until
+// read, so no switch shows a state it doesn't know.
+let agentsOff = null;
+function readAgentsOff() {
+  api("agents-off").then((r) => { agentsOff = r; if (view === "gateway") renderGatewayModels(); }).catch(() => {});
+}
+async function setAgentsOff(ids, off) {
+  if (!ids.length) return;
+  try { agentsOff = await api("agents-off", { ids, off }); } catch (e) { statusErr(e); }
+  renderGatewayModels();
+}
 // The model list can be folded away, so Recent calls sits under Connect;
 // the fold is remembered.
 let modelsFolded = false;
@@ -732,7 +755,7 @@ function renderGatewayModels() {
     q.className = "find";
     q.oninput = () => { modelQuery = q.value; renderGatewayModels(); };
     q.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Escape" && q.value) { q.value = modelQuery = ""; renderGatewayModels(); } };
-    $("#copyModels").before(q);
+    $("#agentsFor").before(q);
   }
   q.hidden = all.length < 5 || list.hidden;
   q.title = t("Words match a model's id, name, provider or a group's models");
@@ -743,6 +766,23 @@ function renderGatewayModels() {
   });
   $("#copyModels").hidden = !models.length || list.hidden;
   $("#copyModels").onclick = () => copy(models.map((m) => m.id).join("\n"), t("Model ids"));
+  // a provider's models are turned off for agents, or on, several at once:
+  // those the list shows (narrowed by the search), or every model in a
+  // routing group, so agents see the group alone
+  const offs = new Set(agentsOff?.off || []);
+  const keeps = agentsOff?.keep || {};
+  const own = models.filter((m) => !m.group);
+  const canOff = (ms) => ms.filter((m) => !offs.has(m.id) && !keeps[m.id]).map((m) => m.id);
+  const inGroups = canOff(all.filter((m) => !m.group && all.some((g) => g.group && g.members.includes(m.id))));
+  const shownOff = canOff(own), shownOn = own.filter((m) => offs.has(m.id)).map((m) => m.id);
+  const fa = $("#agentsFor");
+  fa.hidden = !agentsOff || !own.length || list.hidden;
+  fa.onclick = () => openProtoMenu(fa, [
+    ...inGroups.length ? [{ v: "groups", name: t("Turn off the {n} in routing groups", { n: inGroups.length }), literalName: true }] : [],
+    { v: "off", name: t("Turn off the {n} shown", { n: shownOff.length }), literalName: true },
+    { v: "on", name: t("Turn on the {n} shown", { n: shownOn.length }), literalName: true },
+  ].filter((o) => o.v === "groups" || (o.v === "off" ? shownOff : shownOn).length), "", (v) => setAgentsOff(v === "groups" ? inGroups : v === "off" ? shownOff : shownOn, v !== "on"), "For agents", "", "right");
+  if (!shownOff.length && !shownOn.length && !inGroups.length) fa.hidden = true;
   if (!all.length) {
     const empty = el("div", "empty-state", "");
     empty.append(el("b", "", t("No models exposed yet")), t("Add a provider, or sign in to Codex or Copilot; their models show up here for every agent."));
@@ -754,12 +794,23 @@ function renderGatewayModels() {
     return;
   }
   for (const m of models) {
-    const row = el("div", "row model" + (m.id === (FLAVORS[flavor]?.decide ? decideModel : exampleModel) ? " selected" : ""));
+    const off = !m.group && offs.has(m.id);
+    const row = el("div", "row model" + (m.id === (FLAVORS[flavor]?.decide ? decideModel : exampleModel) ? " selected" : "") + (off ? " agents-off" : ""));
     const who = el("div", "who");
     const name = el("div", "name", m.id);
     if (namedFree(m.id, m.name)) name.append(freeBadge(false));
     who.append(name, el("div", "sub", m.name && m.name !== m.id.split("/")[1] ? `${m.name} · ${m.provider.name}` : m.provider.name));
-    row.append(m.group ? stackIcon(m.icons) : icon(m.provider.icon || "generic"), who, mediaInfo(m), copyBtn(m.id, t("Model id")));
+    row.append(m.group ? stackIcon(m.icons) : icon(m.provider.icon || "generic"), who, mediaInfo(m));
+    // listed for agents, or not: a group is what they keep seeing
+    if (!m.group && agentsOff) {
+      const keep = !off && keeps[m.id];
+      const sw = libSwitch("gw-agents", !off, t("Listed for agents"));
+      sw.title = keep ? t("{agent} is set to it, so it stays", { agent: keep }) : t(off ? "Off for agents · still served through routing groups and requests that name it" : "Listed for agents");
+      if (keep) sw.setAttribute("aria-disabled", "true");
+      sw.onclick = (e) => { e.stopPropagation(); if (!keep) setAgentsOff([m.id], !off); };
+      row.append(sw);
+    }
+    row.append(copyBtn(m.id, t("Model id")));
     row.title = t("Use this model in the snippets");
     // a decision model is put in System One's snippets, any other in the
     // other APIs'; the API follows the model clicked
@@ -793,6 +844,7 @@ const callRow = (c) => (c.id ? `#${c.id}` : `${c.time}|${c.agent}|${c.model}`);
 
 function renderActivity() {
   const g = providers.gateway;
+  if (prefs && !!prefs.hideRequestText !== hidRead) { hidRead = !hidRead; callBodies.clear(); }
   // what calls left the ring keep, they let go of
   const ids = new Set(g.calls.map(callRow));
   for (const id of callBodies.keys()) if (!ids.has(id)) callBodies.delete(id);
@@ -840,14 +892,15 @@ function renderActivity() {
     if (open) {
       if (!callBodies.has(id)) loadCallBodies(c, id);
       const body = callBodies.get(id);
-      const details = el("div", body.busy || body.error ? "" : "call-details");
+      const details = el("div", body.busy || body.error || body.hidden ? "" : "call-details");
       if (body.busy) details.append(el("div", "none", t("Fetching…")));
       else if (body.error) {
         details.append(el("div", "call-archive-err", body.error));
         const retry = el("button", "text", t("Try again"));
         retry.onclick = () => { loadCallBodies(c, id); renderActivity(); };
         details.append(retry);
-      } else details.append(
+      } else if (body.hidden) details.append(hiddenContentNote());
+      else details.append(
         callBodyPanel("Request Body", body.requestBody, body.requestTruncated, undefined, id + "|req"),
         callBodyPanel("Response Body", body.responseBody, body.responseTruncated, id),
       );
@@ -905,7 +958,7 @@ magpie.plugin("gateway", (ctx) => {
 <p class="usage-note gw-keys-off" id="gatewayKeysOff" hidden data-t>Gateway keys are for other computers, a tunnel to this one such as Cloudflare Tunnel, and web pages: they are added here once Share on local network is on, or a web page is listed in Settings. Agents on this computer need none.</p>
 <div class="row-head"><button class="fold" id="foldConnect" aria-expanded="true" aria-controls="connect"><span class="label" data-t>Connect</span></button><span class="grow"></span><span class="note" id="connectNote"></span></div>
 <section class="list connect" id="connect"></section>
-<div class="row-head"><button class="fold" id="foldModels" aria-expanded="true" aria-controls="gwModels"><span class="label" data-t>Models</span><span class="note" id="modelsCount"></span></button><span class="grow"></span><button class="text" id="copyModels" data-t>Copy all ids</button></div>
+<div class="row-head"><button class="fold" id="foldModels" aria-expanded="true" aria-controls="gwModels"><span class="label" data-t>Models</span><span class="note" id="modelsCount"></span></button><span class="grow"></span><button class="text" id="agentsFor" hidden data-t>For agents</button><button class="text" id="copyModels" data-t>Copy all ids</button></div>
 <div class="list" id="gwModels"></div>
 <div class="row-head"><span class="label" data-t>Recent calls</span><span class="grow"></span><span class="note" id="callsNote"></span></div>
 <div class="list activity" id="activity"></div>
@@ -920,6 +973,7 @@ magpie.plugin("gateway", (ctx) => {
         renderConnect();
         backToReader($("#view-gateway"));
       };
+      menuOf($("#agentsFor"));
       $("#foldModels").prepend(svg(CHEV_R, 11, 1.6));
       $("#foldModels").onclick = () => {
         modelsFolded = !modelsFolded;
@@ -1269,6 +1323,17 @@ function sseBodyPanel(label, raw, truncated, id) {
   };
   draw();
   return panel;
+}
+
+// hiddenContentNote: a call's bodies with Show request content off
+// (llxth1 on X), which the gateway didn't keep; the way to the switch
+function hiddenContentNote() {
+  const p = el("div", "none call-hidden", t("Show request content is off in Settings › Privacy: magpie keeps none of what requests said"));
+  const go = el("button", "text", t("Settings › Privacy"));
+  go.type = "button";
+  go.onclick = (e) => { e.stopPropagation(); openSettingsAt(e, "privacy", "#hideRequestTextRow"); };
+  p.append(" ", go);
+  return p;
 }
 
 // id, given, is a response's, whose stream reads as its events; key names

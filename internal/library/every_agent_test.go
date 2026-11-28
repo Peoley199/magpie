@@ -38,6 +38,7 @@ var noLibrary = map[string]string{
 	"raycast":           "not looked at (#5897)",
 	"kirocrew":          "not looked at (#5897)",
 	"t3code":            "not looked at (#5897)",
+	"orca":              "runs Codex and Claude Code, which have their own",
 	"openmausbot":       "not looked at (#5897)",
 	"snow":              "not looked at (#5897)",
 	"aionui":            "not looked at (#5897)",
@@ -51,7 +52,6 @@ var noLibrary = map[string]string{
 	"shelley":           "not looked at (#5897)",
 	"kun":               "not looked at (#5897)",
 	"nowledge-mem":      "a memory app: its own AI only, no skills or MCP servers of an agent's",
-	"dim":               "not looked at (#5897)",
 	"open-code-review":  "a review CLI with its own fixed tools, not a coding agent; whether it reads skills or MCP not looked at",
 }
 

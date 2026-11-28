@@ -86,8 +86,9 @@ func TestAgentsSkillsFolders(t *testing.T) {
 }
 
 // A skill given to Kimi Code is one link in ~/.agents/skills, which Goose
-// shares; Codex and Gemini CLI, which read that folder as well, get no
-// second link in their own, and get one again once it's not there.
+// shares; Gemini CLI, which reads that folder as well, gets no second link
+// in its own, and gets one again once it's not there. Codex keeps its own
+// link to the library's folder: ChatGPT's Work reads its folder alone.
 func TestSharedSkillsWrittenOnce(t *testing.T) {
 	h := sandbox(t)
 	write(t, filepath.Join(h, ".kimi/config.toml"), "")
@@ -103,8 +104,8 @@ func TestSharedSkillsWrittenOnce(t *testing.T) {
 	if !ours(cl, "pdf") {
 		t.Error("claude hasn't it")
 	}
-	if _, err := os.Lstat(cx); !os.IsNotExist(err) {
-		t.Error("codex has a second link to it")
+	if !ours(cx, "pdf") || realDir(cx) != realDir(shared) {
+		t.Error("codex hasn't its own link to the library's")
 	}
 	v, err := Read(nil)
 	if err != nil {
@@ -131,10 +132,10 @@ func TestSharedSkillsWrittenOnce(t *testing.T) {
 	if _, err := os.Lstat(shared); !os.IsNotExist(err) {
 		t.Error("~/.agents/skills still has it")
 	}
-	// on again: codex's own goes, not the skill
+	// on again: once in ~/.agents/skills, and codex's own stays
 	ok(t)(SkillAgents("pdf", []string{"claude", "codex", "goose"}))
-	if _, err := os.Lstat(cx); !os.IsNotExist(err) || !ours(shared, "pdf") {
-		t.Error("not once in ~/.agents/skills")
+	if !ours(cx, "pdf") || !ours(shared, "pdf") {
+		t.Error("not once in ~/.agents/skills, beside codex's own")
 	}
 	if _, err := os.Stat(filepath.Join(src, "pdf/SKILL.md")); err != nil {
 		t.Error("the user's folder went")
@@ -482,6 +483,26 @@ func TestSharedSkillReachesZCode(t *testing.T) {
 
 // Mistral Vibe reads $VIBE_HOME/AGENTS.md and $VIBE_HOME/skills/<name>, else
 // the same under ~/.vibe (alterxyz4 on X).
+// Bub reads the shared ~/.agents/skills, and its MCP servers from the
+// bub-mcp plugin's mcp.json in $BUB_HOME (else ~/.bub), in mcpServers
+// form; it has no user-wide instructions file.
+func TestBubTarget(t *testing.T) {
+	h := sandbox(t)
+	t.Setenv("BUB_HOME", "")
+	write(t, filepath.Join(h, ".bub", "config.yml"), "")
+	tg := targetByID("bub")
+	if tg == nil || tg.Skills != filepath.Join(h, ".agents", "skills") || tg.Instructions != "" ||
+		tg.MCP == nil || tg.MCP.Path != filepath.Join(h, ".bub", "mcp.json") || tg.MCP.Format != fmtKimi {
+		t.Fatalf("bub: %+v", tg)
+	}
+	v := filepath.Join(h, "bhome")
+	t.Setenv("BUB_HOME", v)
+	write(t, filepath.Join(v, "config.yml"), "")
+	if tg := targetByID("bub"); tg == nil || tg.MCP == nil || tg.MCP.Path != filepath.Join(v, "mcp.json") {
+		t.Fatalf("bub under BUB_HOME: %+v", tg)
+	}
+}
+
 func TestVibeTarget(t *testing.T) {
 	h := sandbox(t)
 	t.Setenv("VIBE_HOME", "")

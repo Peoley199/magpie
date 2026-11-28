@@ -72,6 +72,11 @@ type modelJSON struct {
 	// Inputs are the media beyond text and images its source listed it
 	// takes, video and audio (catalog.Model.InputModalities; pingqipai3 on X)
 	Inputs []string `json:"inputs,omitempty"`
+	// Maker is the logo of the model's maker, as its id or else its name
+	// says (agent.ModelIcon, what the agents' pickers draw beside it), ""
+	// for one magpie doesn't know: the editor draws its models by maker
+	// (modelorder.js; WJaunita45604 on X)
+	Maker string `json:"maker,omitempty"`
 	// Headers are the request headers the user gave the model, sent after
 	// the provider's (provider.SetModelHeaders)
 	Headers map[string]string `json:"headers,omitempty"`
@@ -213,6 +218,8 @@ type providerJSON struct {
 	// TakesResolve: it may have them
 	Resolve      map[string][]string `json:"resolve,omitempty"`
 	TakesResolve bool                `json:"takesResolve,omitempty"`
+	// Addresses: a Remote magpie's other addresses (provider.Addresses)
+	Addresses []string `json:"addresses,omitempty"`
 	// TakesServerPin: an https:// address of the user's own to pin
 	// (provider.PinHosts), a preset's pointed at their own server too
 	TakesServerPin bool `json:"takesServerPin,omitempty"`
@@ -321,6 +328,9 @@ type providerJSON struct {
 		Takes bool `json:"takes"`
 		Set   bool `json:"set"`
 	} `json:"balanceToken"`
+	// a key can carry its own account's balance query, where the
+	// provider's token is another account's (provider.KeyBalanceAuth)
+	KeyBalanceAuth bool `json:"keyBalanceAuth,omitempty"`
 	// a StepFun provider's Step Plan windows, told only to a platform
 	// sign-in: which site's, and whether one is kept
 	StepPlan *stepPlanJSON `json:"stepPlan,omitempty"`
@@ -351,9 +361,10 @@ type providerJSON struct {
 	// (provider.TestAs), for a relay that serves only them: the chip's
 	// right-click offers each, and says why one can't be when it can't
 	TestsAs map[string]string `json:"testsAs,omitempty"`
-	// TestPicks is the accounts or keys that are on when there are two
-	// or more (provider.TestPicks): the chip's right-click offers a
-	// test on one of them
+	// TestPicks is the accounts or keys, on or off, when there are two
+	// or more or one is off (provider.TestPicks): the chip's right-click
+	// offers a test on one of them, an account off tested before it is
+	// turned on
 	TestPicks []provider.TestPick `json:"testPicks,omitempty"`
 	// DecideTest is set when its decision models can each be sent a
 	// System One question (provider.AsksDecideModels): a mixed
@@ -411,6 +422,12 @@ type providerJSON struct {
 	// RestartApp: magpie restarts the Codex app's app-server for an
 	// account change it makes by itself (provider.Provider.RestartApp)
 	RestartApp bool `json:"restartApp,omitempty"`
+	// AutoSwitch: magpie signs agy in to the next Antigravity CLI account
+	// with room by itself, under SwitchOnly (provider.Provider.AutoSwitch)
+	AutoSwitch bool `json:"autoSwitch,omitempty"`
+	// AgyWait: the switch AutoSwitch waits to make until agy and the
+	// Antigravity app have quit (provider.AgyWaiting)
+	AgyWait *provider.AgyWait `json:"agyWait,omitempty"`
 	// Self: a Remote magpie that turned out to be this magpie (sync
 	// brought it from the computer that uses this one), left out of
 	// routing unless KeepSelf (provider.Provider.SelfAnswered)
@@ -481,6 +498,12 @@ type providerJSON struct {
 	// what each key's read group rate is multiplied by, by its id, where
 	// it isn't 1 (@YIXIE233 on X)
 	KeyRateFactors map[string]float64 `json:"keyRateFactors,omitempty"`
+	// the account or key each agent set to one uses, by the agent's id
+	// (nb5p on Discord)
+	AgentAccounts map[string]string `json:"agentAccounts,omitempty"`
+	// the accounts and keys an agent may be set to, when there are two or
+	// more to choose from
+	AgentChoices []agentChoiceJSON `json:"agentChoices,omitempty"`
 
 	// what it charges against the official price, 0 for that (#819)
 	PriceRate float64     `json:"priceRate,omitempty"`
@@ -712,7 +735,7 @@ type providerAgent struct {
 	Model   string `json:"model,omitempty"`
 	Group   string `json:"group,omitempty"` // through this routing group, one of whose members it is
 	// Hides are this provider's models (by model id) the agent's own model
-	// list leaves out, set on the Agents page (provider.ModelOff): the
+	// list leaves out, set on the Agents page (provider.PicksOff): the
 	// editor's model picks are every agent's, so it says which agent
 	// doesn't show one it has ticked (Kylin_Cloud on X)
 	Hides []string `json:"hides,omitempty"`
@@ -879,6 +902,10 @@ type providersJSON struct {
 	// MovesTo is the plugin each of them goes to, for the add sheet's
 	// offer to install it before signing in
 	MovesTo map[string]string `json:"movesTo,omitempty"`
+	// NoNew are the ones whose plugin magpie gives to nobody new
+	// (plugin.WithdrawnOf): the add sheet offers one only to a user who
+	// still has its accounts
+	NoNew []string `json:"noNew,omitempty"`
 	// Unmoved are the retired built-ins whose accounts haven't moved onto
 	// their plugins yet, served by nothing until they do, with why
 	Unmoved []provider.MoveCandidate `json:"unmoved,omitempty"`
@@ -937,9 +964,11 @@ type agentUse struct {
 	group      provider.Group
 	members    []provider.Member
 	inGroup    bool
-	// off is the agent's own model list's picks (provider.ModelOff), nil
+	// off is the agent's own model list's picks (provider.PicksOff), nil
 	// when it leaves nothing out, or another agent sharing its list (a WSL
-	// one, an omp profile) says it already
+	// one, an omp profile) says it already. The models turned off for
+	// every agent on the Gateway page aren't among them: each agent would
+	// name each one, so the editor's line would list every agent
 	off func(id string) bool
 }
 
@@ -951,7 +980,7 @@ func agentUses(agents []*agent.Agent, findGroup func(string) (provider.Group, []
 		if id := a.ListsFor(); !lists[id] {
 			lists[id] = true
 			if _, only := provider.PickedModels(id); only || len(provider.HiddenModels(id)) > 0 {
-				u.off = provider.ModelOff(id)
+				u.off = provider.PicksOff(id)
 			}
 		}
 		v := agentModel(a)
@@ -1028,10 +1057,10 @@ func providerInfoWith(p provider.Provider, ls provider.Listing, agents []agentUs
 		ID: p.ID, Name: p.Name, Icon: p.Icon, IconFrom: p.IconFrom, Preset: p.Preset, Host: p.Host(),
 		Chat: p.Chat, Responses: p.Responses, Anthropic: p.Anthropic, Gemini: p.Gemini, Decide: p.Decide, BaseAPI: p.BaseAPI, ModelTest: p.ModelTest(), TestsAs: p.TestClients(), TestPicks: p.TestPicks(), DecideTest: p.AsksDecideModels(), MarksKinds: p.MarksKinds(),
 		Catalog: p.Catalog, Website: p.Website, KeysURL: p.KeysURL,
-		Proxy: p.Proxy, AccountProxies: p.AccountProxies, AccountModels: p.AccountModels, AccountCaps: p.AccountCaps, AccountWindowCaps: p.AccountWindowCaps, AccountWindowAmounts: p.AccountWindowAmounts, AccountNames: p.AccountNames, Headers: p.Headers, ExtraBody: p.ExtraBody, ReplyHeaders: p.ReplyHeaders, PassHeaders: p.PassHeaders, Searches: p.Searches, Cline: p.ClinePinnable(), PinUpstream: p.PinUpstream, Unredacted: p.Unredacted, CountFree: p.CountFree, Billing: p.Billing, BillingKind: p.BillingKind(), InsecureTLS: p.InsecureTLS, TakesInsecureTLS: p.TakesInsecureTLS(), HTTP1: p.HTTP1, ClientCert: tilde(p.ClientCert), ClientKey: tilde(p.ClientKey), ServerCA: tilde(p.ServerCA), TakesClientCert: p.TakesClientCert(), ServerPin: p.ServerPin, TakesServerPin: p.TakesServerPin(), Resolve: p.Resolve, TakesResolve: p.TakesResolve(), Socket: p.Socket, TakesSocket: p.TakesSocket(), LimitRestOff: p.LimitRestOff, UpstreamProviders: p.UpstreamProviders, ImageFilesOff: p.ImageFilesOff, TakesImageFiles: p.TakesImageFiles(), NativeCompaction: p.NativeCompaction, CarriesCompaction: p.CarriesCompaction(), PassUserAgent: !p.MagpieUserAgent, OwnClient: p.OwnClient(), PassErrors: p.PassErrors, TakesPassErrors: p.TakesPassErrors(), AuthHeader: p.AuthHeader, BothAuth: p.BothAuth(), BalanceURL: p.BalanceURL, BalancePath: p.BalancePath, BalanceMethod: p.BalanceMethod, NoBalanceProbe: p.NoBalanceProbe, ModelsURL: p.ModelsURL, ListOff: p.ListsOff(), TakesListOff: p.Account == nil && !p.IsPlugin() && !p.DecideOnly(), TakesModelHeaders: p.Account == nil, DecideAPIKind: p.DecideAPIKind(),
+		Proxy: p.Proxy, AccountProxies: p.AccountProxies, AccountModels: p.AccountModels, AccountCaps: p.AccountCaps, AccountWindowCaps: p.AccountWindowCaps, AccountWindowAmounts: p.AccountWindowAmounts, AccountNames: p.AccountNames, Headers: p.Headers, ExtraBody: p.ExtraBody, ReplyHeaders: p.ReplyHeaders, PassHeaders: p.PassHeaders, Searches: p.Searches, Cline: p.ClinePinnable(), PinUpstream: p.PinUpstream, Unredacted: p.Unredacted, CountFree: p.CountFree, Billing: p.Billing, BillingKind: p.BillingKind(), InsecureTLS: p.InsecureTLS, TakesInsecureTLS: p.TakesInsecureTLS(), HTTP1: p.HTTP1, ClientCert: tilde(p.ClientCert), ClientKey: tilde(p.ClientKey), ServerCA: tilde(p.ServerCA), TakesClientCert: p.TakesClientCert(), ServerPin: p.ServerPin, TakesServerPin: p.TakesServerPin(), Resolve: p.Resolve, TakesResolve: p.TakesResolve(), Addresses: p.Addresses, Socket: p.Socket, TakesSocket: p.TakesSocket(), LimitRestOff: p.LimitRestOff, UpstreamProviders: p.UpstreamProviders, ImageFilesOff: p.ImageFilesOff, TakesImageFiles: p.TakesImageFiles(), NativeCompaction: p.NativeCompaction, CarriesCompaction: p.CarriesCompaction(), PassUserAgent: !p.MagpieUserAgent, OwnClient: p.OwnClient(), PassErrors: p.PassErrors, TakesPassErrors: p.TakesPassErrors(), AuthHeader: p.AuthHeader, BothAuth: p.BothAuth(), BalanceURL: p.BalanceURL, BalancePath: p.BalancePath, BalanceMethod: p.BalanceMethod, NoBalanceProbe: p.NoBalanceProbe, ModelsURL: p.ModelsURL, ListOff: p.ListsOff(), TakesListOff: p.Account == nil && !p.IsPlugin() && !p.DecideOnly(), TakesModelHeaders: p.Account == nil, DecideAPIKind: p.DecideAPIKind(),
 		Ready: p.Ready(), Chosen: p.PicksOf(avail), Agents: make([]providerAgent, 0, len(agents)),
-		Fallback: p.Fallback, Routing: p.Routing, Sink: p.Sink, UseFirst: p.UseFirst, NoStandIn: p.NoStandIn, Affinity: p.Affinity, KeepLogin: p.KeepLogin, KeepLoginAs: p.KeepLoginAs, SwitchOnly: p.SwitchOnly, RestartApp: p.RestartApp, Self: p.SelfAnswered(), KeepSelf: p.KeepSelf, ThisDevice: p.ThisDevice, CapStop: p.CapStop, CapCareful: p.CapCareful, Unlisted: p.Unlisted, NoModels: p.ServesNone(), BestInFamily: p.BestInFamily && len(p.Models) == 0 && !p.NoModels, Off: p.Off, Contexts: p.Contexts,
-		MaxConcurrency: p.MaxConcurrency, PluginConcurrency: p.PluginConcurrency(), MaxAccounts: p.MaxAccounts, PluginAccounts: p.PluginAtOnce(), PriceRate: p.PriceRate, KeyPriceRates: p.KeyPriceRates, TopUpRate: p.TopUpRate, RateReadHours: p.RateReadHours, KeyGroupRates: keyGroupRatesOf(p), KeyRateFactors: p.KeyRateFactors,
+		Fallback: p.Fallback, Routing: p.Routing, Sink: p.Sink, UseFirst: p.UseFirst, NoStandIn: p.NoStandIn, Affinity: p.Affinity, KeepLogin: p.KeepLogin, KeepLoginAs: p.KeepLoginAs, SwitchOnly: p.SwitchOnly, RestartApp: p.RestartApp, AutoSwitch: p.AutoSwitch, Self: p.SelfAnswered(), KeepSelf: p.KeepSelf, ThisDevice: p.ThisDevice, CapStop: p.CapStop, CapCareful: p.CapCareful, Unlisted: p.Unlisted, NoModels: p.ServesNone(), BestInFamily: p.BestInFamily && len(p.Models) == 0 && !p.NoModels, Off: p.Off, Contexts: p.Contexts,
+		MaxConcurrency: p.MaxConcurrency, PluginConcurrency: p.PluginConcurrency(), MaxAccounts: p.MaxAccounts, PluginAccounts: p.PluginAtOnce(), PriceRate: p.PriceRate, KeyPriceRates: p.KeyPriceRates, TopUpRate: p.TopUpRate, RateReadHours: p.RateReadHours, KeyGroupRates: keyGroupRatesOf(p), KeyRateFactors: p.KeyRateFactors, AgentAccounts: p.AgentAccounts,
 		RateWindows: p.RateWindows, RateNow: rateNowOf(p, time.Now()),
 		AccountConcurrency: p.AccountConcurrency, AccountWeights: p.AccountWeights, QueueLimit: p.QueueLimit, QueueWait: p.QueueWait, MaxRPM: p.MaxRPM, MaxImages: p.MaxImages,
 		Outputs: provider.OutputsOf(p.ID), Compacts: provider.CompactsOf(p.ID),
@@ -1039,6 +1068,10 @@ func providerInfoWith(p provider.Provider, ls provider.Listing, agents []agentUs
 	if p.Account != nil && p.Account.Agent == p.ID {
 		out.SignInMoves = provider.SignInMovesOf(p.ID)
 	}
+	if p.AutoSwitch {
+		out.AgyWait = provider.AgyWaiting()
+	}
+	out.AgentChoices = agentChoicesOf(p)
 	if p.Account != nil {
 		for _, r := range p.AccountRefs() {
 			if s := provider.SeatNameOf(p.ID, r); s != "" {
@@ -1075,6 +1108,7 @@ func providerInfoWith(p provider.Provider, ls provider.Listing, agents []agentUs
 		out.Key.Optional = pr.NoKey
 	}
 	out.BalanceToken.Takes, out.BalanceToken.Set = provider.TakesBalanceToken(p), p.BalanceToken != ""
+	out.KeyBalanceAuth = provider.TakesKeyBalanceAuth(p)
 	if provider.TakesZhipuTeam(p) {
 		out.ZhipuTeam = &provider.ZhipuTeam{}
 		if p.ZhipuTeam != nil {
@@ -1149,6 +1183,7 @@ func providerInfoWith(p provider.Provider, ls provider.Listing, agents []agentUs
 			out.KeyList[i].Rest = noticeRest(n)
 		}
 	}
+	keyModelRests(p.ID, out.KeyList, restKey)
 	// and one with a spend cap, what it has spent of it (the gateway
 	// holds it at the cap by the same count, gateway.spendHeld)
 	for i, k := range out.KeyList {
@@ -1175,8 +1210,10 @@ func providerInfoWith(p provider.Provider, ls provider.Listing, agents []agentUs
 			if !ok {
 				continue
 			}
-			if h := p.KeyCapHeld(ka, "", now, provider.KeyAllowance); h != nil {
-				out.KeyList[i].CapHeld = &provider.KeyCapState{Used: h.Used, Cap: h.Cap, Back: h.Back}
+			if h := p.KeyCapHeld(ka, "", now, keyAllowance); h != nil {
+				// and the models it still serves at the cap: OpenCode
+				// Go's free ones, which no window counts (#7773)
+				out.KeyList[i].CapHeld = &provider.KeyCapState{Used: h.Used, Cap: h.Cap, Back: h.Back, Free: p.KeyCapLeaves(ka, now, keyAllowance)}
 			}
 		}
 	}
@@ -1284,6 +1321,7 @@ func providerInfoWith(p provider.Provider, ls provider.Listing, agents []agentUs
 		}
 		window := p.WindowIn(m, set)
 		j := modelJSON{ID: m.ID, Name: m.Name, Efforts: provider.EffortsOf(m), On: on, Context: window, Output: provider.OutputWithin(window, p.ReplyLimitIn(m, set)), Listed: provider.ListedWindow(m), ListedOutput: provider.OutputWithin(provider.ListedWindow(m), p.ReplyLimitIn(m, settings.Settings{})), Max: m.MaxContext, Free: m.Free, Rate: m.Rate, RateWas: m.RateWas, Images: images, ImageSet: imageSet, Own: own, Best: newest[m.ID], Inputs: mediaInputs(provider.InputsOf(m))}
+		j.Maker = modelMaker(m.ID, m.Name)
 		list, listed, free := pricer.Prices(set, m.ID)
 		j.Zero = !m.Free && free
 		if j.Keys, j.KeyCount = keysApart(m.Keys, onKeys, keyAt); j.KeyCount == len(j.Keys) {
@@ -1520,6 +1558,49 @@ var (
 	limitNoticesUnder = gateway.LimitNoticesUnder
 )
 
+// keyAllowance is provider.KeyAllowance, swapped in tests.
+var keyAllowance = provider.KeyAllowance
+
+// keyModelRests puts on each key of ks that is on its models' own rests
+// in force, then the notices of those whose rests ended before the limit
+// did, as the gateway keys them (restKey(k)/model, gateway.restID). A
+// refusal at OpenCode Go or Zen rests the paid model alone since
+// v0.1.4818, and the key row showed only a whole key's rest, so it said
+// nothing of which models were out, or, with an old whole-key notice,
+// that all of them were (xzhih on X, #7773).
+func keyModelRests(id string, ks []provider.KeyInfo, restKey func(provider.KeyInfo) string) {
+	of := map[string]int{}
+	for i, k := range ks {
+		if k.On {
+			of[restKey(k)] = i
+		}
+	}
+	if len(of) == 0 {
+		return
+	}
+	add := func(key string, r provider.KeyRest) bool {
+		base, model, ok := strings.Cut(key, "/")
+		i, mine := of[base]
+		if !ok || !mine || model == "" {
+			return false
+		}
+		r.Model = cmp.Or(r.Model, model)
+		ks[i].Rests = append(ks[i].Rests, r)
+		return true
+	}
+	resting := map[string]bool{}
+	for _, r := range restsUnder(id) {
+		if add(r.Key, provider.KeyRest{Why: r.Why, Status: r.Status, Until: r.Until, Key: r.Key, Probed: r.Probed, By: r.By, Model: r.Model, Error: r.Error, Rate: r.Rate}) {
+			resting[r.Key] = true
+		}
+	}
+	for _, n := range limitNoticesUnder(id) {
+		if !resting[n.Key] {
+			add(n.Key, *noticeRest(n))
+		}
+	}
+}
+
 // noticeRest is a rate limit or quota the gateway rests on no more, as
 // the row shows it: Notice set, Until when the vendor said it lifts.
 func noticeRest(n gateway.LimitNotice) *provider.KeyRest {
@@ -1578,6 +1659,9 @@ func providersState() providersJSON {
 			s.MovesTo = map[string]string{}
 		}
 		s.MovesTo[id] = provider.MovePackage(id)
+		if _, ok := plugin.WithdrawnOf(s.MovesTo[id]); ok {
+			s.NoNew = append(s.NoNew, id)
+		}
 	}
 	s.AgyMove = provider.AgyMoveUsers()
 	for _, c := range provider.MoveCandidates() {
@@ -1830,6 +1914,17 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			} else if route, err := strconv.ParseInt(r.URL.Query().Get("route"), 10, 64); err == nil {
 				c, ok = gw.RouteCall(route)
 			}
+			if gateway.HidesRequestText() {
+				// Show request content off (llxth1 on X): the call's
+				// headers while the ring has it, and that its bodies
+				// aren't kept; nor read from the archive here
+				out := map[string]any{"hidden": true}
+				if ok {
+					out["headers"] = c.Headers()
+				}
+				writeJSON(rw, out)
+				return
+			}
 			if ok {
 				writeJSON(rw, map[string]any{
 					"requestBody": c.RequestBody, "responseBody": c.ResponseBody,
@@ -2006,6 +2101,9 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			// Resolve is the connect addresses of its hosts
 			// (provider.Resolve); left out keeps what it had
 			Resolve *map[string][]string `json:"resolve"`
+			// Addresses are a Remote magpie's other addresses
+			// (provider.Addresses); left out keeps what it had
+			Addresses *[]string `json:"addresses"`
 			// HTTP1 is whether its own hosts are spoken HTTP/1.1 to; a
 			// save that leaves it out keeps it
 			HTTP1 *bool `json:"http1"`
@@ -2167,6 +2265,9 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			// the provider's (#474)
 			Account string   `json:"account"`
 			Allow   []string `json:"allow"`
+			// Agent, for agentaccount: the agent Account is set for, ""
+			// for every one (nb5p on Discord)
+			Agent string `json:"agent"`
 			// AllKeys, for key: every key the provider holds, one a line,
 			// for Copy all keys (provider.AllKeys)
 			AllKeys bool `json:"allKeys"`
@@ -2517,7 +2618,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				if req.InsecureTLS != nil {
 					in.InsecureTLS = *req.InsecureTLS
 				}
-				in = withCerts(in, nil, req.ClientCert, req.ClientKey, req.ServerCA, req.ServerPin, req.Resolve)
+				in = withCerts(in, nil, req.ClientCert, req.ClientKey, req.ServerCA, req.ServerPin, req.Resolve, req.Addresses)
 				if req.HTTP1 != nil {
 					in.HTTP1 = *req.HTTP1
 				}
@@ -2571,7 +2672,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				} else if old != nil {
 					in.InsecureTLS = old.InsecureTLS
 				}
-				in = withCerts(in, old, req.ClientCert, req.ClientKey, req.ServerCA, req.ServerPin, req.Resolve)
+				in = withCerts(in, old, req.ClientCert, req.ClientKey, req.ServerCA, req.ServerPin, req.Resolve, req.Addresses)
 				if req.HTTP1 != nil {
 					in.HTTP1 = *req.HTTP1
 				} else if old != nil {
@@ -2706,8 +2807,10 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 					in.AccountConcurrency = old.AccountConcurrency
 					in.AccountWeights = old.AccountWeights
 					in.AccountNames = old.AccountNames     // with accountname
+					in.AgentAccounts = old.AgentAccounts   // with agentaccount
 					in.KeySpendCaps = old.KeySpendCaps     // with keyspendcap
 					in.KeyOwnBalances = old.KeyOwnBalances // with keyownbalance
+					in.KeyBalanceAuth = old.KeyBalanceAuth // with keys/balance
 				}
 				// the image models unticked in its editor likewise: []
 				// shows them all (321sssrt on X)
@@ -2798,6 +2901,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 					in.KeepLogin = old.KeepLogin // set on its own, with keeplogin
 					in.KeepLoginAs = old.KeepLoginAs
 					in.SwitchOnly, in.RestartApp = old.SwitchOnly, old.RestartApp // switchonly, restartapp
+					in.AutoSwitch = old.AutoSwitch                                // autoswitch
 					in.KeepSelf = old.KeepSelf                                    // keepself
 					in.ThisDevice = old.ThisDevice                                // thisdevice
 					in.CapStop, in.CapCareful = old.CapStop, old.CapCareful       // capstop, capcareful
@@ -2904,14 +3008,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 						return
 					}
 					if *req.LibraryShared {
-						id := in.ID
-						go func() {
-							ctx, cancel := context.WithTimeout(context.Background(), 2*provider.RemoteLibraryWait)
-							defer cancel()
-							if _, err := library.UseRemoteLibrary(ctx, id); err != nil {
-								log.Printf("library: the Library of %s: %v", id, err)
-							}
-						}()
+						go remoteLibraryRead(in.ID)
 					}
 				}
 			}
@@ -2948,6 +3045,18 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				}
 				wg.Wait()
 				cancel()
+				// a Remote magpie just added with a key that may use all
+				// of it, the user's own hub: its MCP servers, skills and
+				// prompts come with it, unless a switch was set by hand
+				// (starballl on X). After its list, which tells a magpie
+				// that is this one.
+				if req.New && p.IsRemoteMagpie() && (req.LibraryMCP == nil || req.LibraryShared == nil) {
+					ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+					if _, shared := library.AddedRemote(ctx, in.ID, req.LibraryMCP == nil, req.LibraryShared == nil); shared {
+						go remoteLibraryRead(in.ID)
+					}
+					cancel()
+				}
 			}
 			// after the list is fetched: a limit has to name a model it has
 			if req.Outputs != nil {
@@ -3022,6 +3131,12 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			agent.SyncCatalogSoon()
 		case "accountmodels":
 			if err := provider.SetAccountModels(in.ID, req.Account, req.Allow); err != nil {
+				fail(rw, err)
+				return
+			}
+		case "agentaccount":
+			// the account or key Agent uses alone, "" for every one
+			if err := provider.SetAgentAccount(in.ID, usage.AgentOf(req.Agent), req.Account); err != nil {
 				fail(rw, err)
 				return
 			}
@@ -3158,6 +3273,13 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				fail(rw, err)
 				return
 			}
+		case "autoswitch":
+			// agy signed in to the next account with room by itself, or
+			// switched only when the user picks one, the default (#1908)
+			if err := provider.SetAutoSwitch(in.ID, in.AutoSwitch); err != nil {
+				fail(rw, err)
+				return
+			}
 		case "keepself":
 			// a Remote magpie that is this magpie, used anyway or left out
 			// (hanslin1666 on Discord)
@@ -3241,7 +3363,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			}
 			saved := *p
 			if req.Typed {
-				q := withCerts(typed(*p, in, req.Proxy, req.InsecureTLS, req.HTTP1), p, req.ClientCert, req.ClientKey, req.ServerCA, req.ServerPin, req.Resolve)
+				q := withCerts(typed(*p, in, req.Proxy, req.InsecureTLS, req.HTTP1), p, req.ClientCert, req.ClientKey, req.ServerCA, req.ServerPin, req.Resolve, req.Addresses)
 				p = &q
 			}
 			if len(req.Test) > 0 {
@@ -3278,7 +3400,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 				}
 				p = *saved
 			}
-			p = withCerts(typed(p, in, req.Proxy, req.InsecureTLS, req.HTTP1), &p, req.ClientCert, req.ClientKey, req.ServerCA, req.ServerPin, req.Resolve)
+			p = withCerts(typed(p, in, req.Proxy, req.InsecureTLS, req.HTTP1), &p, req.ClientCert, req.ClientKey, req.ServerCA, req.ServerPin, req.Resolve, req.Addresses)
 			if strings.TrimSpace(in.Decide) != "" {
 				// a decision API is asked its smallest question, at
 				// POST …/systemone (#647)
@@ -3369,7 +3491,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			if old, err := provider.Find(in.ID); err == nil && in.ID != "" {
 				p = *old
 			}
-			p = withCerts(typed(p, in, req.Proxy, req.InsecureTLS, req.HTTP1), &p, req.ClientCert, req.ClientKey, req.ServerCA, req.ServerPin, req.Resolve)
+			p = withCerts(typed(p, in, req.Proxy, req.InsecureTLS, req.HTTP1), &p, req.ClientCert, req.ClientKey, req.ServerCA, req.ServerPin, req.Resolve, req.Addresses)
 			ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 			defer cancel()
 			seen, err := p.PeekServerCert(ctx)
@@ -3390,7 +3512,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			if p.Name == "" {
 				p.Name = cmp.Or(strings.TrimSpace(in.Name), "the vendor")
 			}
-			p = withCerts(typed(p, in, req.Proxy, req.InsecureTLS, req.HTTP1), &p, req.ClientCert, req.ClientKey, req.ServerCA, req.ServerPin, req.Resolve)
+			p = withCerts(typed(p, in, req.Proxy, req.InsecureTLS, req.HTTP1), &p, req.ClientCert, req.ClientKey, req.ServerCA, req.ServerPin, req.Resolve, req.Addresses)
 			ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 			defer cancel()
 			all, err := p.ListAll(ctx)
@@ -3439,7 +3561,7 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			defer cancel()
 			ask := *p
 			if req.Typed {
-				ask = withCerts(typed(*p, in, req.Proxy, req.InsecureTLS, req.HTTP1), p, req.ClientCert, req.ClientKey, req.ServerCA, req.ServerPin, req.Resolve)
+				ask = withCerts(typed(*p, in, req.Proxy, req.InsecureTLS, req.HTTP1), p, req.ClientCert, req.ClientKey, req.ServerCA, req.ServerPin, req.Resolve, req.Addresses)
 			}
 			ms, dropped, err := ask.Refetch(ctx)
 			if err != nil {
@@ -3451,6 +3573,17 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			// too, or its Save wrote them back
 			if q, err := provider.Find(p.ID); err == nil {
 				p = q
+			}
+			if p.IsRemoteMagpie() {
+				// and those set aside before it: another magpie's list
+				// is followed in the background, so an editor opened
+				// before still holds a pick that list dropped, and its
+				// Save put it back (CryptoSarom on X)
+				for _, m := range p.Delisted {
+					if !slices.Contains(dropped, m) {
+						dropped = append(dropped, m)
+					}
+				}
 			}
 			writeJSON(rw, struct {
 				Count    int          `json:"count"`
@@ -3532,6 +3665,16 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 	mux.HandleFunc("GET /api/claude/mode", func(rw http.ResponseWriter, r *http.Request) {
 		writeJSON(rw, gateway.ClaudeModeNow())
 	})
+	// each hidden Claude Code's screen as it stands, for the Claude
+	// editor's look at where a run is (#8075); asked while it is open
+	mux.HandleFunc("GET /api/claude/screens", func(rw http.ResponseWriter, r *http.Request) {
+		runs, err := claudeScreens(r.Context())
+		if err != nil {
+			fail(rw, err)
+			return
+		}
+		writeJSON(rw, runs)
+	})
 	// Codex's background app-server, left on the account before a switch
 	// or on the model list before a change (the Agents row's Restart):
 	// restarting it (Codex 0.162's sessions on it reconnect, after a turn
@@ -3591,6 +3734,10 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			Protocol           provider.Protocol
 			Weight             int
 			Plan               string
+			// a key's own account's balance query (action balance):
+			// a blank token keeps the saved one, Clear drops both
+			Token, User string
+			Clear       bool
 		}
 		var added, had, removed int
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
@@ -3631,6 +3778,10 @@ func providerRoutes(mux *http.ServeMux, w Windows) {
 			err = provider.RenameKey(in.ID, in.Ref, in.Name)
 		case "replace":
 			err = replaceKey(in.ID, in.Ref, in.Key)
+		case "balance":
+			// the access token and user id of the account the key is
+			// of, where it isn't the provider's (key_balance_auth.go)
+			err = provider.SetKeyBalanceAuth(in.ID, in.Ref, in.Token, in.User, in.Clear)
 		case "on", "off":
 			moved, err = agent.Reseat(func() error { return provider.SetKeyOn(in.ID, in.Ref, r.PathValue("action") == "on") })
 		default:
@@ -4117,10 +4268,11 @@ func typed(p, in provider.Provider, proxy *string, insecureTLS, http1 *bool) pro
 }
 
 // withCerts is p with the client certificate, key and server CA a save
-// or an unsaved test typed (#5596; the connect addresses, Resolve, with them), each one left out kept from old (nil:
+// or an unsaved test typed (#5596; the connect addresses, Resolve, and a
+// Remote magpie's other addresses with them), each one left out kept from old (nil:
 // none); a ~ is taken as home, as a save keeps it, so an unsaved test
 // reads the same files.
-func withCerts(p provider.Provider, old *provider.Provider, cert, key, ca, pin *string, resolve *map[string][]string) provider.Provider {
+func withCerts(p provider.Provider, old *provider.Provider, cert, key, ca, pin *string, resolve *map[string][]string, addrs *[]string) provider.Provider {
 	var kept provider.Provider
 	if old != nil {
 		kept = *old
@@ -4145,6 +4297,10 @@ func withCerts(p provider.Provider, old *provider.Provider, cert, key, ca, pin *
 	p.Resolve = kept.Resolve
 	if resolve != nil {
 		p.Resolve = *resolve // Save keeps it as netproxy.CheckResolve has it, or says why
+	}
+	p.Addresses = kept.Addresses
+	if addrs != nil {
+		p.Addresses = *addrs // Save writes them as the base URL is, or says why
 	}
 	return p
 }
@@ -4336,6 +4492,37 @@ func withdrawnLines() []withdrawnJSON {
 		// the plugin to use instead (w.Package), on
 		insteadOn := slices.ContainsFunc(list, func(e plugin.Entry) bool { return !e.Off && plugin.PackageName(e.Spec) == w.Package })
 		out = append(out, withdrawnJSON{Withdrawal: w, Beside: insteadOn && w.ID == "antigravity" && provider.AgyHasEvery()})
+	}
+	return out
+}
+
+// remoteLibraryRead reads the Library of the Remote magpie id, its "Use
+// its skills and prompts" switch just turned on; a variable for the tests.
+var remoteLibraryRead = func(id string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*provider.RemoteLibraryWait)
+	defer cancel()
+	if _, err := library.UseRemoteLibrary(ctx, id); err != nil {
+		log.Printf("library: the Library of %s: %v", id, err)
+	}
+}
+
+// agentChoiceJSON is an account or key an agent may be set to use
+// (provider.SetAgentAccount), by its id and the name it is shown by.
+type agentChoiceJSON struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// agentChoicesOf is p's accounts and keys to set an agent to, none when
+// it has one only: there is nothing to choose.
+func agentChoicesOf(p provider.Provider) []agentChoiceJSON {
+	ids := p.AccountIDs()
+	if len(ids) < 2 {
+		return nil
+	}
+	out := make([]agentChoiceJSON, 0, len(ids))
+	for _, a := range ids {
+		out = append(out, agentChoiceJSON{ID: a.ID, Name: a.Shown(p)})
 	}
 	return out
 }

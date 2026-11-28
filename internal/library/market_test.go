@@ -2,6 +2,7 @@ package library
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -233,10 +234,11 @@ func TestFeaturedSkills(t *testing.T) {
 	t.Cleanup(func() { popular.Lock(); popular.list = nil; popular.Unlock() })
 
 	list, _ := MarketSkills("")
-	if len(list) != 4 || list[0].ID != "magpie-community/plugins/magpie-setup" || list[1].ID != "magpie-community/plugins/magpie-quota" || list[2].ID != "magpie-community/plugins/magpie-sessions" || list[3].ID != "o/r/pdf" {
+	if len(list) != 5 || list[0].ID != "magpie-community/plugins/magpie-setup" || list[1].ID != "magpie-community/plugins/magpie-quota" || list[2].ID != "magpie-community/plugins/magpie-sessions" ||
+		list[3].ID != "magpie-community/plugins/magpie-api" || list[4].ID != "o/r/pdf" {
 		t.Fatalf("market: %+v", list)
 	}
-	for _, m := range list[:3] {
+	for _, m := range list[:4] {
 		if !m.Official || !m.Featured || m.Description == "" || m.Icon != gh("magpie-community") || !offered(m.Icon) {
 			t.Fatalf("magpie's own: %+v", m)
 		}
@@ -253,6 +255,12 @@ func TestFeaturedSkills(t *testing.T) {
 	// Leyuu_5 on X: an agent sets magpie up; found by what a user searches
 	for _, q := range []string{"setup", "routing", "gateway key"} {
 		if list, _ := MarketSkills(q); len(list) == 0 || list[0].SkillID != "magpie-setup" {
+			t.Fatalf("%s: %+v", q, list)
+		}
+	}
+	// thedavidweng on X: an orchestrating agent reads magpie's own API
+	for _, q := range []string{"http api", "orchestrat", "magpie-api"} {
+		if list, _ := MarketSkills(q); len(list) == 0 || list[0].SkillID != "magpie-api" {
 			t.Fatalf("%s: %+v", q, list)
 		}
 	}
@@ -564,6 +572,76 @@ func TestThirdPartyMemoryServers(t *testing.T) {
 	}
 }
 
+func TestMarketSearchRanksAllSources(t *testing.T) {
+	sandbox(t)
+	servers := []string{`{"name":"io.github.morluto/rea","title":"REA","packages":[{"registryType":"npm","identifier":"rea-agents"}]}`}
+	for i := range 100 {
+		servers = append(servers, fmt.Sprintf(`{"name":"io.github.read/read-%d","title":"Read %d","description":"A read server.","packages":[{"registryType":"npm","identifier":"read-%d"}]}`, i, i, i))
+	}
+	fakeRegistry(t, servers...)
+
+	list, err := MarketServers("REA")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) == 0 || list[0].ID != "io.github.morluto/rea" {
+		t.Fatalf("REA ranking: first=%+v, total=%d", list[:min(len(list), 3)], len(list))
+	}
+	if slices.IndexFunc(list, func(m MarketServer) bool {
+		return m.Featured && strings.Contains(strings.ToLower(m.Description), "real")
+	}) >= 0 {
+		t.Fatalf("description-only featured match was offered: %+v", list)
+	}
+}
+
+func TestMarketSearchMatchTiers(t *testing.T) {
+	for _, c := range []struct {
+		name, text, q string
+		want          bool
+	}{
+		{"description mid-word", "Reads files and searches", "rea", false},
+		{"description word", "Use a postgres database", "postgres", true},
+		{"multi-word description", "A browser automation server", "browser automation", true},
+		{"Chinese description", "用于文件系统访问", "文件系统", true},
+		{"long query mid-word", "Reads databases", "atabase", true},
+		{"short Chinese query mid-text", "用于文件访问", "文件", true},
+		{"package prefix", "@acme/postgres-mcp", "postgres", true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			m := MarketServer{Description: c.text}
+			if c.name == "package prefix" {
+				m.server = Server{Command: "npx", Args: []string{"-y", m.Name}}
+				m.server.Args[1] = c.text
+			}
+			if _, got := marketScore(m, c.q); got != c.want {
+				t.Fatalf("marketScore(%q, %q) matched %v, want %v", c.text, c.q, got, c.want)
+			}
+		})
+	}
+}
+
+// A word search lists every server that has the word, however many, each
+// once at its best score (#7891): ranking the sources together dropped
+// everything past 100, and a server two sources gave kept its first score.
+func TestMarketBestKeepsEveryServerOnce(t *testing.T) {
+	var list []scored
+	for i := range 150 {
+		m := MarketServer{ID: fmt.Sprintf("s%d", i)}
+		m.server = Server{Command: "npx", Args: []string{"-y", fmt.Sprintf("pkg-%d", i)}}
+		list = append(list, scored{m: m, score: 1000})
+	}
+	again := list[149]
+	again.score = 8000
+	list = append(list, again)
+	out := best(list)
+	if len(out) != 150 {
+		t.Fatalf("%d servers, want 150", len(out))
+	}
+	if out[0].ID != "s149" || out[1].ID != "s0" {
+		t.Fatalf("order: %s, %s, …", out[0].ID, out[1].ID)
+	}
+}
+
 func TestReaKeepsItsOwnLogo(t *testing.T) {
 	const logo = "https://rea.tools/assets/favicon.svg"
 	i := slices.IndexFunc(popularServers(), func(m MarketServer) bool { return m.ID == "io.github.morluto/rea" })
@@ -585,5 +663,64 @@ func TestReaKeepsItsOwnLogo(t *testing.T) {
 	}
 	if !offered(logo) {
 		t.Fatal("not offered")
+	}
+}
+
+// RockyShowlle on X: Figma couldn't be connected. Discover found Figma's
+// remote server only as the registry's com.figma.mcp/mcp, added as "mcp"
+// and put behind the MCP router, which can't sign in to it (Figma admits
+// only the apps it lists, #1619). Searching figma now offers Figma, added
+// as figma and kept direct so each agent signs in itself, and Figma
+// Desktop, the server Figma's desktop app runs at 127.0.0.1:3845/mcp for
+// any app, which the router serves like any other.
+func TestFigmaInTheMarket(t *testing.T) {
+	hubSandbox(t)
+	fakeRegistry(t, `{"name": "com.figma.mcp/mcp", "title": "Figma MCP Server", "remotes": [{"type": "streamable-http", "url": "https://mcp.figma.com/mcp"}]}`)
+	list, err := MarketServers("figma")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, m := range list {
+		if m.server.URL == "https://mcp.figma.com/mcp" || m.server.URL == "http://127.0.0.1:3845/mcp" {
+			ids = append(ids, m.ID)
+		}
+	}
+	if !slices.Equal(ids, []string{"figma", "figma-desktop"}) || list[0].ID != "figma" || list[1].ID != "figma-desktop" {
+		t.Fatalf("figma finds %v first of %d", ids, len(list))
+	}
+	if !list[0].SignIn || list[1].SignIn {
+		t.Fatalf("sign-in: %v %v", list[0].SignIn, list[1].SignIn)
+	}
+
+	ok(t)(SetMCPHub(true))
+	ok(t)(InstallServer("figma", nil, []string{"claude"}))
+	ok(t)(InstallServer("figma-desktop", nil, []string{"claude"}))
+	l, err := load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := l.server("figma"); s == nil || s.URL != "https://mcp.figma.com/mcp" || s.Hub != HubDirect {
+		t.Fatalf("figma %+v", s)
+	}
+	if s := l.server("figma-desktop"); s == nil || s.URL != "http://127.0.0.1:3845/mcp" || s.Transport != "http" || s.Hub != "" || len(s.Headers) != 0 {
+		t.Fatalf("figma-desktop %+v", s)
+	}
+	got, err := targetByID("claude").MCP.read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := got["figma"]; s == nil || s.URL != "https://mcp.figma.com/mcp" {
+		t.Fatalf("Claude Code isn't given Figma's own address: %+v", got)
+	}
+	if got["figma-desktop"] != nil || got[HubEntry] == nil {
+		t.Fatalf("Figma Desktop isn't behind the router: %+v", got)
+	}
+	var routed []string
+	for _, s := range hubServers("claude") {
+		routed = append(routed, s.Name)
+	}
+	if !slices.Contains(routed, "figma-desktop") || slices.Contains(routed, "figma") {
+		t.Fatalf("the router serves %v", routed)
 	}
 }

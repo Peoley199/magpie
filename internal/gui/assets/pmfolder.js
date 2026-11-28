@@ -2,9 +2,8 @@
 // models went onto the C: drive): where they are downloaded, under an
 // Advanced fold since it is set once. Move… picks a folder in the system's
 // picker and the models are moved there in the background, copied and
-// checked before the old ones go; Move back is magpie's cache. app.js
-// imports this the first time the model row draws, so it weighs nothing on
-// the core.
+// checked before the old ones go; Move back is magpie's cache.
+// privacymodel.js imports this, so it weighs nothing on the core.
 let pmFolderOpen = false;
 window.pmFolder = function (row, score, m, act) {
   // last in the card, under Rules too: Advanced closes its card rather than
@@ -17,9 +16,7 @@ window.pmFolder = function (row, score, m, act) {
   if (row.parentNode.lastElementChild !== box) row.parentNode.append(box);
   let d = box.querySelector("details.pm-adv");
   if (!d) {
-    d = el("details", "prefs-more pm-adv");
-    d.ontoggle = () => { pmFolderOpen = d.open; };
-    d.append(el("summary", "", t("Advanced")));
+    [d] = advFold({ cls: "pm-adv", keep: (o) => { pmFolderOpen = o; }, inner: false });
   }
   d.open = pmFolderOpen || !!m.folderSet || !!m.moving || !!m.moveError;
   const r = el("div", "row pref pm-folder");

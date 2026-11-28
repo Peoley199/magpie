@@ -273,6 +273,15 @@ type Agent struct {
 	// something else rewrote the config — or "" when it is all there
 	// (see Drift).
 	Check func() string
+	// Outside, for an agent something beyond the config magpie writes can
+	// take past magpie (Claude Code's managed settings, a provider switch
+	// in its own settings or the shell), says what does, or "" when
+	// nothing does. Setting the agent again can't change that, so it is
+	// drift of its own kind, "outside", told how to fix rather than
+	// offered a Reconnect that says it worked while it didn't (jimlee0824v2
+	// on X). Check is asked first: a config gone off is "unwired", which
+	// Rewire sets again on a port change whatever else holds.
+	Outside func() string
 	// LastUsed, for an agent that keeps a log of its own prompts, is when
 	// it was last used — each prompt a request the gateway should have
 	// seen, so one it didn't went round magpie (see Drift). Zero if unknown.
@@ -378,7 +387,9 @@ type Agent struct {
 	// shared, when set, is the name of what the agent keeps in a folder its
 	// vendor's other app reads and writes the same way: Cursor CLI's
 	// ~/.cursor (MCP servers, skills, hooks, chats) is the Cursor editor's
-	// too, so the Library and Sessions call it Cursor (SharedName).
+	// too, so the Library and Sessions call it Cursor (SharedName). Claude
+	// Code's is its own Name: Cindy's bundled copy reads ~/.claude as it
+	// does (cindyClaudeHere).
 	shared string
 	// sharedApp, when set, reports whether an app of the vendor's that
 	// reads the shared folder is here, the folder or not: VS Code and
@@ -395,6 +406,29 @@ type Agent struct {
 	// magpie's, no sign the agent is here (jiangshangmuyun on X: Codex,
 	// never installed, listed after a ChatGPT account was added).
 	signIn string
+	// readHere are files in Dir another app reads there as its own, which
+	// the user or magpie's Library writes for that app: Pi's AGENTS.md
+	// and the rest of its instructions, which Cindy's Pi reads too, and
+	// which the Library writes for Cindy with no Pi here (T_t__biu on X,
+	// #7872). A folder holding only these (and skills) is no sign the
+	// agent is here.
+	readHere []string
+	// synced are the names in Dir magpie's Library writes for the agent
+	// (a folder's with a trailing "/"), and syncedKeys the files it
+	// writes some of the keys of, with those top-level keys: Codex's
+	// AGENTS.md, hooks.json and agents/, and a config.toml of only
+	// mcp_servers and shell_environment_policy. None is a sign the agent
+	// is here: the Library gave them to it while it was a target for
+	// something else (Cindy's copy, a sign-in's auth.json before #7994),
+	// and they would keep it one, and list it, after that was gone.
+	synced     []string
+	syncedKeys map[string][]string
+	// otherCopy, when set, says whether what is at Dir and Path is only
+	// what another app's own copy of the agent made, nothing else of the
+	// agent's being here: Cindy's bundled Claude Code makes ~/.claude and
+	// ~/.claude.json on its first run (T_t__biu on X, #7872). They are
+	// then no sign the agent is here.
+	otherCopy func() bool
 	// sign, when set, is one more sign the agent is here, for a folder
 	// that is dirShared: a file only the agent (or its own app) writes
 	// there (the Qoder app's status file, #2138).
@@ -451,8 +485,13 @@ func (a *Agent) SharedName() string {
 // whether the agent is or not. The agent isn't Detected for it (dirShared),
 // but what the other app reads there too, the Library's MCP servers and
 // skills, is still given.
+// What the agent's sign-in, another app or magpie's Library wrote there
+// (notSign) is no sign of that app either: a ~/.codex holding only the
+// auth.json a sign-in in magpie wrote, and the skills the Library then
+// linked there, made Codex a target with no Codex, Codex app or Cindy
+// here (TomXPRIME, #7994).
 func (a *Agent) SharedHere() bool {
-	return a.shared != "" && a.WSL == "" && a.Dir != "" && !Taken(a.Dir) && (agentDir(a.Dir) || a.SharedRead())
+	return a.shared != "" && a.WSL == "" && a.Dir != "" && !Taken(a.Dir) && (agentDirBut(a.Dir, a.notSign) || a.SharedRead())
 }
 
 // SharedRead reports whether an app of the agent's vendor that reads its
@@ -473,10 +512,7 @@ func (a *Agent) Detected() bool {
 	if a.Dir != "" && Taken(a.Dir) {
 		return false
 	}
-	if _, ok := statKind(a.Path); ok && (a.pathOwn == nil || a.pathOwn()) {
-		return true
-	}
-	if a.Dir != "" && !a.dirShared && agentDir(a.Dir, a.signIn) {
+	if a.configHere() && (a.otherCopy == nil || !a.otherCopy()) {
 		return true
 	}
 	if a.sign != nil && a.sign() {
@@ -491,6 +527,26 @@ func (a *Agent) Detected() bool {
 		return true
 	}
 	return false
+}
+
+// configHere reports whether the agent's config file, or a folder it made
+// itself, is here.
+func (a *Agent) configHere() bool {
+	if _, ok := statKind(a.Path); ok && (a.pathOwn == nil || a.pathOwn()) && !a.syncedOnly(a.Path) {
+		return true
+	}
+	return a.Dir != "" && !a.dirShared && agentDirBut(a.Dir, a.notSign)
+}
+
+// notSign reports whether e, an entry in Dir, says nothing of the agent:
+// the sign-in magpie wrote (signIn), a file another app reads there
+// (readHere), or what magpie's Library wrote there (synced, syncedKeys).
+func (a *Agent) notSign(e os.DirEntry) bool {
+	n := e.Name()
+	if e.IsDir() {
+		return slices.Contains(a.synced, n+"/")
+	}
+	return n == a.signIn || slices.Contains(a.readHere, n) || slices.Contains(a.synced, n) || a.syncedOnly(filepath.Join(a.Dir, n))
 }
 
 // binAt is where the agent's command name is, as magpie runs it: on
@@ -517,8 +573,13 @@ func binAt(name string) string {
 // installers (npx skills and the like) make <folder>/skills for every agent
 // they know, installed or not; a folder holding nothing else is theirs.
 // own names a file magpie may have written there itself (Agent.signIn),
-// no sign either.
+// or one another app reads there (Agent.readHere), no sign either.
 func agentDir(p string, own ...string) bool {
+	return agentDirBut(p, func(e os.DirEntry) bool { return !e.IsDir() && slices.Contains(own, e.Name()) })
+}
+
+// agentDirBut is agentDir with not saying which entries are no sign.
+func agentDirBut(p string, not func(os.DirEntry) bool) bool {
 	es, err := os.ReadDir(p)
 	if err != nil {
 		return isDir(p)
@@ -527,7 +588,7 @@ func agentDir(p string, own ...string) bool {
 		return true
 	}
 	for _, e := range es {
-		if n := e.Name(); n != "skills" && n != ".DS_Store" && !(e.IsDir() && leftover[strings.ToLower(n)]) && !(!e.IsDir() && slices.Contains(own, n)) {
+		if n := e.Name(); n != "skills" && n != ".DS_Store" && !(e.IsDir() && leftover[strings.ToLower(n)]) && !not(e) {
 			return true
 		}
 	}
@@ -807,7 +868,11 @@ func (a *Agent) notOffered(ref string, opts []Option) error {
 	if slices.ContainsFunc(shown, func(e provider.Entry) bool { return slices.Contains(ids, e.ID) }) {
 		return nil // shown the agent: a field may offer fewer (Claude Desktop's tiers)
 	}
+	every := provider.AgentsOff()
 	for _, e := range provider.Catalog() {
+		if slices.Contains(ids, e.ID) && every[e.ID] {
+			return fmt.Errorf("%s is turned off for agents on magpie's Gateway page, so %s isn't shown it: turn it back on there, or pick a routing group it is in", ref, a.Name)
+		}
 		if slices.Contains(ids, e.ID) {
 			return fmt.Errorf("%s is one of magpie's models, but %s isn't shown it: magpie models %s says why, and magpie visible %s all shows it every model", ref, a.Name, a.ID, a.ID)
 		}

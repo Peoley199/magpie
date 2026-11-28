@@ -26,9 +26,13 @@ type fakeHub struct {
 	servers map[string][]HubServer
 	calls   []string
 	call    func(ctx context.Context, server, tool string) (json.RawMessage, error)
+	met     []string // the agents Met was told of
+	version string   // what Version says
 }
 
 func (f *fakeHub) On() bool { f.mu.Lock(); defer f.mu.Unlock(); return f.on }
+
+func (f *fakeHub) Version() string { f.mu.Lock(); defer f.mu.Unlock(); return f.version }
 
 func (f *fakeHub) Tools(_ context.Context, agent string) []HubTool {
 	f.mu.Lock()
@@ -55,6 +59,18 @@ func (f *fakeHub) Call(ctx context.Context, agent, server, tool string, args jso
 
 func (f *fakeHub) Stop()  {}
 func (f *fakeHub) Prune() {}
+
+func (f *fakeHub) Met(agent string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.met = append(f.met, agent)
+}
+
+func (f *fakeHub) metAgents() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.met...)
+}
 
 func (f *fakeHub) ran() []string {
 	f.mu.Lock()
@@ -286,7 +302,7 @@ func TestHubMCPServerDown(t *testing.T) {
 	}
 	start := time.Now()
 	m = readMCP(t, hubPost(h, "claude", here, toolsCall("slow__wait", `{}`)))
-	if !m.Result.IsError || m.Result.Content[0].Text != "The MCP server slow couldn't run wait: it didn't answer in 200ms" {
+	if !m.Result.IsError || m.Result.Content[0].Text != "The MCP server slow couldn't run wait: it didn't answer in 200ms; a longer call timeout can be given to it in magpie's Library → MCP, under Advanced" {
 		t.Errorf("a server that doesn't answer: %+v", m)
 	}
 	if d := time.Since(start); d > 30*time.Second {
@@ -673,5 +689,144 @@ func TestHubMCPRemoteEntryNeedsKey(t *testing.T) {
 	m = readMCP(t, hubPostAt(h, HubMCPAll, here, call, "X-Forwarded-For", "203.0.113.9", "Authorization", "Bearer "+secrets[0]))
 	if m.Result.IsError || len(f.ran()) != 2 {
 		t.Fatalf("through a proxy, with its key: %+v, ran %q", m, f.ran())
+	}
+}
+
+// An agent on another computer using a magpie in Docker (bitxeno303 on
+// X: DeepSeek Harness at /mcp/magpie/hub/dsh got no tools) is told to the
+// Library (Hub.Met) when it connects, with its key, from there, its
+// project's key cut off, and before its tools are listed. A call from this
+// computer, a web page's, another magpie's router or the address any app
+// is given meets no agent.
+func TestHubMCPMeetsAgentFromAnotherComputer(t *testing.T) {
+	fresh(t)
+	t.Setenv("MAGPIE_ADDR", "")
+	t.Setenv("MAGPIE_PUBLIC_URL", "")
+	t.Setenv("MAGPIE_TRUST_PROXY", "")
+	f := &fakeHub{on: true}
+	withHub(t, f)
+	h := lanGuard(New().Handler())
+	_, secrets := newCaller(t, "Remote client") // shares magpie
+	key := []string{"Authorization", "Bearer " + secrets[0]}
+	const there = "172.17.0.1:40000" // the host, as a container sees it
+	init := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}`
+
+	hubPost(h, "dsh", here, init)
+	hubPost(h, "dsh", here, toolsList)
+	hubPostAt(h, HubMCPAll, there, toolsList, key...)
+	hubPost(h, "dsh", there, toolsList, append([]string{"Origin", "http://192.0.2.7:3430", "Sec-Fetch-Site", "same-origin"}, key...)...)
+	hubPost(h, "dsh", there, toolsList, append([]string{RouterHeader, "1"}, key...)...)
+	if got := f.metAgents(); len(got) != 0 {
+		t.Fatalf("met %q from this computer, a page, another router or the address for any app", got)
+	}
+	if w := hubPost(h, "dsh", there, init, key...); w.Code != http.StatusOK {
+		t.Fatalf("initialize from there: %d %s", w.Code, w.Body)
+	}
+	if w := hubPost(h, "dsh"+HubProjectSep+"abc123", there, toolsList, key...); w.Code != http.StatusOK {
+		t.Fatalf("tools/list from there: %d %s", w.Code, w.Body)
+	}
+	if got := f.metAgents(); !slices.Equal(got, []string{"dsh", "dsh"}) {
+		t.Fatalf("met %q, want dsh on initialize and on tools/list", got)
+	}
+}
+
+// What Met records is listed at once: the first tools/list of an agent on
+// another computer has the servers Met gave it.
+func TestHubMCPMetBeforeListing(t *testing.T) {
+	fresh(t)
+	t.Setenv("MAGPIE_ADDR", "")
+	t.Setenv("MAGPIE_PUBLIC_URL", "")
+	t.Setenv("MAGPIE_TRUST_PROXY", "")
+	f := &meetingHub{fakeHub: fakeHub{on: true, tools: map[string][]HubTool{}}}
+	withHub(t, f)
+	h := lanGuard(New().Handler())
+	_, secrets := newCaller(t, "Remote client")
+	m := readMCP(t, hubPost(h, "dsh", "172.17.0.1:40000", toolsList, "Authorization", "Bearer "+secrets[0]))
+	if len(m.Result.Tools) == 0 || m.Result.Tools[0].Name != "notes__find" {
+		t.Fatalf("first tools/list: %+v", m)
+	}
+}
+
+// meetingHub gives an agent it meets the notes server, as the Library does.
+type meetingHub struct{ fakeHub }
+
+func (f *meetingHub) Met(agent string) {
+	f.fakeHub.Met(agent)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.tools[agent] = []HubTool{{Server: "notes", Tool: "find", Spec: hubSpec("find")}}
+}
+
+// A server with a call timeout of its own in the Library is waited for
+// that long, by a tool the agent listed and by one it names that the list
+// left out, and a call that runs out of it names it (steinxia on X: every
+// server behind the router had the same 50s).
+func TestHubMCPServerOwnWait(t *testing.T) {
+	fresh(t)
+	f := &fakeHub{on: true,
+		tools: map[string][]HubTool{"claude": {
+			{Server: "render", Tool: "build", Spec: hubSpec("build"), Wait: time.Hour},
+			{Server: "db", Tool: "query", Spec: hubSpec("query")},
+			{Server: "slow", Tool: "wait", Spec: hubSpec("wait"), Wait: 200 * time.Millisecond},
+		}},
+		servers: map[string][]HubServer{"claude": {{Name: "render", Wait: time.Hour}, {Name: "db"}, {Name: "slow", Wait: 200 * time.Millisecond}}},
+	}
+	// what each call was given, read off its context's deadline: no wait
+	// for a clock
+	f.call = func(ctx context.Context, server, tool string) (json.RawMessage, error) {
+		if server == "slow" {
+			<-ctx.Done()
+			return nil, errors.New("it didn't answer in time")
+		}
+		d, ok := ctx.Deadline()
+		left := time.Until(d)
+		return json.RawMessage(fmt.Sprintf(`{"content":[{"type":"text","text":"%v %v"}]}`, ok, left > 50*time.Minute)), nil
+	}
+	withHub(t, f)
+	h := lanGuard(New().Handler())
+	text := func(m mcpReply) string {
+		if len(m.Result.Content) == 0 {
+			return fmt.Sprintf("%+v", m)
+		}
+		return m.Result.Content[0].Text
+	}
+	if got := text(readMCP(t, hubPost(h, "claude", here, toolsCall("render__build", `{}`)))); got != "true true" {
+		t.Errorf("a server given an hour, listed: %s", got)
+	}
+	if got := text(readMCP(t, hubPost(h, "claude", here, toolsCall("db__query", `{}`)))); got != "true false" {
+		t.Errorf("a server with no timeout of its own: %s", got)
+	}
+	// a tool the list didn't give, asked for by its name, has its
+	// server's wait too
+	f.mu.Lock()
+	f.tools["claude"] = f.tools["claude"][1:]
+	f.mu.Unlock()
+	if got := text(readMCP(t, hubPost(h, "claude", here, toolsCall("render__other", `{}`)))); got != "true true" {
+		t.Errorf("a server given an hour, by name: %s", got)
+	}
+	m := readMCP(t, hubPost(h, "claude", here, toolsCall("slow__wait", `{}`)))
+	if want := "The MCP server slow couldn't run wait: it didn't answer in 200ms, the call timeout it has in magpie's Library"; !m.Result.IsError || text(m) != want {
+		t.Errorf("a server past its own timeout: %s", text(m))
+	}
+}
+
+// run_code runs as long as the longest call timeout among its tools'
+// servers, and says so: a script is never ended before one of its calls
+// may be.
+func TestHubCodeBudgetOwnWait(t *testing.T) {
+	ts := []hubTool{{HubTool: HubTool{Server: "a"}}, {HubTool: HubTool{Server: "b", Wait: 300 * time.Second}}}
+	if d := hubCodeBudget(ts); d != 300*time.Second {
+		t.Errorf("budget %v", d)
+	}
+	if d := hubCodeBudget(ts[:1]); d != hubCodeWait {
+		t.Errorf("budget with no server's own %v", d)
+	}
+	desc, _ := hubCodeSpec("", false, nil, hubCodeBudget(ts))["description"].(string)
+	if !strings.Contains(desc, "and 300s in all.") {
+		t.Errorf("description: %s", desc)
+	}
+	desc, _ = hubCodeSpec("", false, nil, hubCodeBudget(ts[:1]))["description"].(string)
+	if !strings.Contains(desc, "and 50s in all.") {
+		t.Errorf("description with no server's own: %s", desc)
 	}
 }

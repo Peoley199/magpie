@@ -17,8 +17,9 @@ import (
 // Subagent is a conversation a session's agent started inside it, which its
 // agent keeps beside the session's own and counts in it (#2261): a Claude
 // Code (or Qoder) subagent's agent-<id>.jsonl, an OpenCode child session, a
-// Kimi Code agents/agent-<n>/wire.jsonl. Codex's subagents are sessions of
-// their own, which name theirs in ParentSession instead.
+// Kimi Code agents/agent-<n>/wire.jsonl, an agy conversation it started.
+// Codex's subagents are sessions of their own, which name theirs in
+// ParentSession instead.
 type Subagent struct {
 	ID    string `json:"id"`
 	Title string `json:"title,omitempty"`
@@ -99,6 +100,16 @@ func subagentsOf(s Session, fs []file) []Subagent {
 			if sa.Title = title(sp.Description); sa.Title == "" {
 				sa.Title = kimiWireOf(f.path).Prompt
 			}
+		case "agy":
+			// a conversation agy started as a subagent (agyFold)
+			sa.ID = f.m().sid
+			if f.m().parent != s.ID {
+				sa.Parent = f.m().parent
+			}
+			if a := f.m().agy; a != nil {
+				sa.Kind = a.Kind
+			}
+			sa.Title = cmp.Or(st.more().Named, st.Title)
 		default:
 			continue
 		}
@@ -320,15 +331,38 @@ var ErrNoSubagent = errors.New("no such subagent in this session")
 
 // SubagentTranscript is the conversation of the session's subagent sub.
 func SubagentTranscript(s Session, sub string) (Transcript, error) {
+	return SubagentTranscriptAfter(s, sub, 0)
+}
+
+// SubagentTranscriptAfter is SubagentTranscript from the part after the
+// first n (TranscriptAfter).
+func SubagentTranscriptAfter(s Session, sub string, n int) (Transcript, error) {
 	if !Reads(s.Agent) {
 		return Transcript{Parts: []Part{}}, ErrNotRead
 	}
-	for _, sa := range s.Subagents {
-		if sa.ID != sub {
-			continue
-		}
-		c := Session{Agent: s.Agent, ID: sa.ID, Path: sa.Path}
-		return TranscriptOf(c)
+	c, ok := subagentSession(s, sub)
+	if !ok {
+		return Transcript{Parts: []Part{}}, ErrNoSubagent
 	}
-	return Transcript{Parts: []Part{}}, ErrNoSubagent
+	return TranscriptAfter(c, n)
+}
+
+// SubagentCounted is Counted for the session's subagent sub.
+func SubagentCounted(s Session, sub string, t Transcript) (Transcript, error) {
+	c, ok := subagentSession(s, sub)
+	if !ok {
+		return t, ErrNoSubagent
+	}
+	return Counted(c, t)
+}
+
+// subagentSession is the session's subagent sub, read as a session of its
+// own.
+func subagentSession(s Session, sub string) (Session, bool) {
+	for _, sa := range s.Subagents {
+		if sa.ID == sub {
+			return Session{Agent: s.Agent, ID: sa.ID, Path: sa.Path}, true
+		}
+	}
+	return Session{}, false
 }

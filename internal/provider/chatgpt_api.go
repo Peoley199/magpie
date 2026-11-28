@@ -72,10 +72,12 @@ const (
 
 var siwcClient = &http.Client{Timeout: 30 * time.Second, CheckRedirect: KeepsCredentials}
 
-// siwcNoUsage is what a ChatGPT API account's usage line says: OpenAI's
-// API tells no plan usage, and the account added as ChatGPT (Codex's
-// backend) does.
-const siwcNoUsage = "a ChatGPT API account's usage isn't told through OpenAI's API, only at " + SIWCUsageURL + "; the same account added as ChatGPT shows it here"
+// siwcNoUsage is what a ChatGPT API account's usage line says when no
+// Codex sign-in of the same ChatGPT account is known (siwcTwin): OpenAI's
+// API tells no plan usage, and Codex's backend does. It used to send the
+// user to add the account again as ChatGPT (tmr11235 on X: signed in to
+// Codex with it already); a Codex sign-in is found by itself now.
+const siwcNoUsage = "a ChatGPT API account's usage isn't told through OpenAI's API, only at " + SIWCUsageURL + "; magpie shows it here while Codex is signed in to the same ChatGPT account"
 
 // ErrSIWCSignIn is an account OpenAI no longer refreshes: it must be
 // signed in again.
@@ -829,12 +831,13 @@ func SIWCForTest(issuer, api string) func() {
 	return func() { siwcIssuer, siwcAuthorizeURL, siwcTokenURL, siwcAPI = oldI, oldA, oldT, oldS }
 }
 
-// siwcAlsoOn is the ChatGPT API accounts in use behind the first.
-func siwcAlsoOn() []Provider {
+// siwcAlsoOn is the ChatGPT API accounts in use behind the first; withOff,
+// those turned off too, marked off.
+func siwcAlsoOn(withOff bool) []Provider {
 	var out []Provider
 	for _, l := range siwcLoginList() {
-		if !l.Active && l.On {
-			out = append(out, siwcProvider(l))
+		if !l.Active && (l.On || withOff) {
+			out = append(out, offIf(siwcProvider(l), !l.On))
 		}
 	}
 	return out

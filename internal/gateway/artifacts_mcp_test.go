@@ -21,7 +21,7 @@ func artifacts(t *testing.T) http.Handler {
 	dir := t.TempDir()
 	was := artifact.Dir
 	artifact.Dir = func() string { return dir }
-	t.Cleanup(func() { artifact.Dir = was })
+	t.Cleanup(func() { artifact.CloseDBs(); artifact.Dir = was })
 	return lanGuard(New().Handler())
 }
 
@@ -166,7 +166,7 @@ func TestArtifactsPublishSaysWhy(t *testing.T) {
 func TestArtifactsMCPOnlyForAgentsHere(t *testing.T) {
 	h := artifacts(t)
 	list := `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`
-	if m := readMCP(t, mcpPostTo(h, ArtifactsMCPPath, "127.0.0.1:50000", list)); len(m.Result.Tools) != 6 {
+	if m := readMCP(t, mcpPostTo(h, ArtifactsMCPPath, "127.0.0.1:50000", list)); len(m.Result.Tools) != 7 {
 		t.Fatalf("tools: %+v", m.Result.Tools)
 	}
 	for _, c := range []struct {
@@ -180,6 +180,34 @@ func TestArtifactsMCPOnlyForAgentsHere(t *testing.T) {
 	} {
 		if w := mcpPostTo(h, ArtifactsMCPPath, c.addr, list, c.hdr...); w.Code == 200 {
 			t.Errorf("%s was answered: %s", c.name, w.Body)
+		}
+	}
+}
+
+// An agent that defers MCP tools behind a search shows the server as the
+// start of its instructions only (Codex 0.172 cuts it near 250
+// characters), so what makes an agent publish a page it writes, and the
+// tool it searches for, are in that start.
+func TestArtifactsInstructionsLeadWithTheTrigger(t *testing.T) {
+	h := artifacts(t)
+	var m struct {
+		Result struct {
+			Instructions string `json:"instructions"`
+		} `json:"result"`
+	}
+	w := mcpPostTo(h, ArtifactsMCPPath, "127.0.0.1:50000", `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"codex-mcp-client","version":"0.172.0"}}}`)
+	if err := json.Unmarshal(w.Body.Bytes(), &m); err != nil {
+		t.Fatalf("%v: %s", err, w.Body)
+	}
+	head := m.Result.Instructions[:min(200, len(m.Result.Instructions))]
+	for _, want := range []string{artifactPublishTool, "HTML", "tool", "game", "app", "HTML file"} {
+		if !strings.Contains(head, want) {
+			t.Errorf("the first 200 characters don't say %q: %q", want, head)
+		}
+	}
+	for _, not := range []string{"magpie", "Magpie", "Codex", "Claude Code"} {
+		if strings.Contains(m.Result.Instructions, not) {
+			t.Errorf("the instructions name %q", not)
 		}
 	}
 }
@@ -268,7 +296,7 @@ func shareSite(t *testing.T) (puts func() int, up func() bool) {
 		defer mu.Unlock()
 		const id = "abcdefghijklmnop"
 		if r.Method != http.MethodPost && (!live || r.Header.Get("Authorization") != "Bearer tok") {
-			http.Error(w, `{"error":"no such share"}`, http.StatusNotFound)
+			http.Error(w, `{"error":"no such shared page: it was taken down"}`, http.StatusNotFound)
 			return
 		}
 		switch r.Method {
@@ -276,6 +304,9 @@ func shareSite(t *testing.T) (puts func() int, up func() bool) {
 			live = true
 			w.WriteHeader(http.StatusCreated)
 			w.Write([]byte(`{"id":"` + id + `","url":"https://usemagpie.ai/a/` + id + `","token":"tok","version":1}`))
+		case http.MethodGet:
+			// its assets (none)
+			w.Write([]byte(`{"blobs":[]}`))
 		case http.MethodPut:
 			n++
 			w.Write([]byte(`{"id":"` + id + `","url":"https://usemagpie.ai/a/` + id + `","version":2}`))
@@ -323,5 +354,108 @@ func TestArtifactsSharedFollowsPublish(t *testing.T) {
 		if b, _ := json.Marshal(tool.(map[string]any)["inputSchema"]); strings.Contains(string(b), "share") {
 			t.Fatalf("an agent can share: %s", b)
 		}
+	}
+}
+
+// The guide is a tool of its own, loaded with the server, read-only: it
+// gives the capabilities a list or a declaration names, and publish's
+// capabilities point an agent to it.
+func TestArtifactsGuideTool(t *testing.T) {
+	h := artifacts(t)
+	var guide, publish map[string]any
+	for _, x := range artifactsMCPTools() {
+		switch m := x.(map[string]any); m["name"] {
+		case artifactGuideTool:
+			guide = m
+		case artifactPublishTool:
+			publish = m
+		}
+	}
+	if guide == nil || guide["annotations"].(map[string]any)["readOnlyHint"] != true || guide["_meta"].(map[string]any)["anthropic/alwaysLoad"] != true {
+		t.Fatalf("the guide tool: %v", guide)
+	}
+	if b, _ := json.Marshal(publish["inputSchema"]); !strings.Contains(string(b), artifactGuideTool) || !strings.Contains(string(b), "view, interact, admin, owner, self") {
+		t.Fatalf("publish's capabilities don't name the guide or the levels: %s", b)
+	}
+	for _, args := range []map[string]any{{"capabilities": []string{"db"}}, {"capabilities": map[string]any{"db": map[string]any{}}}} {
+		said, isErr := artifactsCall(t, h, artifactGuideTool, args)
+		if isErr || !strings.Contains(said, "db.collection(") || strings.Contains(said, "\nsample: ") {
+			t.Fatalf("guide %v: %s", args, said)
+		}
+	}
+	if said, isErr := artifactsCall(t, h, artifactGuideTool, map[string]any{}); isErr || !strings.Contains(said, "\nsample: ") || !strings.Contains(said, "\nassets: ") {
+		t.Fatalf("the whole guide: %s", said)
+	}
+	if said, isErr := artifactsCall(t, h, artifactGuideTool, map[string]any{"capabilities": []string{"speech"}}); !isErr || !strings.Contains(said, "speech") {
+		t.Fatalf("speech: %v %s", isErr, said)
+	}
+}
+
+// #7665: with magpie web at MAGPIE_PUBLIC_URL (SetArtifactsAt), what an
+// agent is told and lists names the page there, where the user's browser
+// on another computer is signed in; open_artifact still opens this
+// computer's browser at this computer's address, and the gateway's own
+// /a/ still opens to that browser alone.
+func TestArtifactLinksAtWebAddress(t *testing.T) {
+	h := artifacts(t)
+	SetArtifactsAt("https://magpie.example.com/")
+	t.Cleanup(func() { SetArtifactsAt("") })
+	said, isErr := artifactsCall(t, h, artifactPublishTool, map[string]any{"html": "<title>Plan</title><p>hi"})
+	if isErr {
+		t.Fatal(said)
+	}
+	id := publishedID(t, said)
+	at := "https://magpie.example.com/a/" + id + "/"
+	if !strings.Contains(said, "Published \"Plan\": "+at+"\n") || strings.Contains(said, URL()) || !strings.Contains(said, "signed in to magpie web") {
+		t.Fatalf("publish: %s", said)
+	}
+	for tool, args := range map[string]map[string]any{artifactReadTool: {"id": id}, artifactListTool: {}} {
+		if said, isErr := artifactsCall(t, h, tool, args); isErr || !strings.Contains(said, at) || strings.Contains(said, URL()) {
+			t.Errorf("%s: %s", tool, said)
+		}
+	}
+	if u := ArtifactURL(id, 2); u != "https://magpie.example.com/a/"+id+"@2/" {
+		t.Errorf("a version: %s", u)
+	}
+	var opened string
+	was := openArtifactURL
+	openArtifactURL = func(u string) error { opened = u; return nil }
+	t.Cleanup(func() { openArtifactURL = was })
+	if said, isErr := artifactsCall(t, h, artifactOpenTool, map[string]any{"id": id}); isErr || opened != URL()+"/a/"+id+"/" {
+		t.Errorf("open: %q %s", opened, said)
+	}
+	r := httptest.NewRequest(http.MethodGet, "/a/"+id+"/", nil)
+	r.RemoteAddr, r.Host = "192.0.2.7:4000", "magpie.example.com"
+	if w := httptest.NewRecorder(); func() int { h.ServeHTTP(w, r); return w.Code }() < 400 {
+		t.Error("the gateway opened a page to another computer")
+	}
+
+	// an agent away (#7890) is given magpie web's address too, not the
+	// one it called magpie at, which the user's browser isn't signed in to
+	for tool, args := range map[string]map[string]any{artifactPublishTool: {"id": id, "html": "<p>away"}, artifactReadTool: {"id": id}, artifactListTool: {}} {
+		said, isErr := awayCall(t, h, "http://magpie:3425", t.TempDir(), tool, args)
+		if isErr || !strings.Contains(said, at) || strings.Contains(said, "http://magpie:3425") {
+			t.Errorf("%s away: %s", tool, said)
+		}
+		if tool == artifactPublishTool && !strings.Contains(said, "signed in to magpie web") {
+			t.Errorf("publish away: %s", said)
+		}
+	}
+
+	// on the network, the gateway opens the address without a key
+	// (artifactPageAsked), as the publish says
+	t.Setenv("MAGPIE_ADDR", "0.0.0.0:3425")
+	if said, _ := artifactsCall(t, h, artifactPublishTool, map[string]any{"id": id, "html": "<p>net"}); !strings.Contains(said, at) || !strings.Contains(said, "without a key") || strings.Contains(said, "signed in") {
+		t.Errorf("publish on the network: %s", said)
+	}
+	t.Setenv("MAGPIE_ADDR", "")
+
+	// without it, this computer's address, as before
+	SetArtifactsAt("")
+	if said, _ := artifactsCall(t, h, artifactReadTool, map[string]any{"id": id}); !strings.Contains(said, URL()+"/a/"+id+"/") {
+		t.Errorf("read without a web address: %s", said)
+	}
+	if said, _ := artifactsCall(t, h, artifactPublishTool, map[string]any{"id": id, "html": "<p>two"}); !strings.Contains(said, "private to this computer") {
+		t.Errorf("publish without a web address: %s", said)
 	}
 }

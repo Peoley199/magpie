@@ -61,6 +61,10 @@
 //                          shared artifacts: a page a magpie user shared,
 //                          and sharing, updating and taking one down
 //                          (shares.js); a.usemagpie.ai serves their files
+//   /g/<id>, /groups, /api/groups, /api/groups/<id>, /api/groups/report,
+//   /api/groups/like       shared routing groups: a group's page and the
+//                          gallery, and sharing, listing, counting and
+//                          liking them (groups.js)
 //
 // Everything else is the static site in public/.
 
@@ -70,6 +74,11 @@ import { SPONSORS } from "./sponsors.js";
 import { serve as serveFile, held, onR2, mirror, githubFile } from "./files.js";
 import { handle as pluginStats, prune as prunePlugins } from "./pluginstats.js";
 import { api as shareAPI, page as sharePage, content as shareContent, prune as pruneShares, CONTENT as SHARE_HOST } from "./shares.js";
+import { api as groupAPI, page as groupPage, prune as pruneGroups } from "./groups.js";
+import { api as liveAPI, ShareLive } from "./live.js";
+
+// each shared page's data and room (live.js)
+export { ShareLive };
 
 const REPO = "yetone/magpie-releases";
 const SITE = "https://usemagpie.ai";
@@ -104,9 +113,21 @@ export default {
       url.hostname = url.hostname.slice(4);
       return Response.redirect(url.toString(), 301);
     }
-    if (url.pathname === "/api/shares" || url.pathname.startsWith("/api/shares/")) return shareAPI(req, env, ctx);
+    if (url.pathname.startsWith("/api/visitors") || url.pathname.startsWith("/api/shares/")) {
+      const got = await liveAPI(req, env, ctx);
+      if (got) return got;
+    }
+    // a path neither knows (a malformed id, an unknown call) is a 404,
+    // not a Worker exception
+    if (url.pathname === "/api/shares" || url.pathname.startsWith("/api/shares/"))
+      return (await shareAPI(req, env, ctx)) || Response.json({ error: "no such call" }, { status: 404 });
     if (url.pathname.startsWith("/a/")) {
       const got = await sharePage(req, env);
+      if (got) return got;
+    }
+    if (url.pathname === "/api/groups" || url.pathname.startsWith("/api/groups/")) return groupAPI(req, env, ctx);
+    if (url.pathname.startsWith("/g/") || url.pathname === "/groups" || url.pathname === "/groups/") {
+      const got = await groupPage(req, env);
       if (got) return got;
     }
     if (url.pathname === "/api/plugins/tagged") return taggedPlugins(ctx);
@@ -230,14 +251,15 @@ export default {
   },
   // the crons (wrangler.jsonc's triggers): every quarter hour the ledger
   // the Stable channel is chosen from, then the day's Daily pick, and
-  // Discover's old counts pruned; every five minutes the newest, the
-  // Stable and the Daily release's files into R2
+  // Discover's and shared groups' old counts pruned; every five minutes
+  // the newest, the Stable and the Daily release's files into R2
   async scheduled(event, env, ctx) {
     if (event.cron === MIRROR_CRON) ctx.waitUntil(keepFiles(ctx, env));
     else {
       ctx.waitUntil(keepLedger(env, Date.now()).catch((e) => console.log("ledger", String(e))).then(() => keepDaily(env, Date.now())));
       ctx.waitUntil(prunePlugins(env));
       ctx.waitUntil(pruneShares(env).catch((e) => console.log("shares", String(e))));
+      ctx.waitUntil(pruneGroups(env).catch((e) => console.log("groups", String(e))));
     }
   },
 };
@@ -421,11 +443,14 @@ export async function relay(req, url) {
 // cookieless, since cookieless drops the address before GeoIP and the
 // country with it. It sends page views and leaves, clicks (autocapture,
 // for heatmaps, dead clicks too), Web Vitals and network timings, uncaught
-// errors, and a session recording with every input masked; the recording
+// errors, and a session recording with every input masked and every
+// [data-no-record] element left out (the contributors table's ~47,000
+// elements and the replay's canvas, which would otherwise be copied whole
+// at load and again at every change, at a cost a visitor feels); the recording
 // and the rest of the project's settings come from its remote config, so
 // flags aren't turned off. Nothing is loaded under Do Not Track or Global
 // Privacy Control. Its project is the daily count's.
-const WEB_ANALYTICS = `<script>if(!(navigator.doNotTrack=="1"||window.doNotTrack=="1"||navigator.globalPrivacyControl)){!function(t,e){var o,n,p,r;e.__SV||(window.posthog&&window.posthog.__loaded)||(window.posthog=e,e._i=[],e.init=function(i,s,a){function g(t,e){var o=e.split(".");2==o.length&&(t=t[o[0]],e=o[1]),t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}}(p=t.createElement("script")).type="text/javascript",p.crossOrigin="anonymous",p.async=!0,p.src=s.api_host.replace(".i.posthog.com","-assets.i.posthog.com")+"/static/array.js",(r=t.getElementsByTagName("script")[0]).parentNode.insertBefore(p,r);var u=e;for(void 0!==a?u=e[a]=[]:a="posthog",u.people=u.people||[],u.toString=function(t){var e="posthog";return"posthog"!==a&&(e+="."+a),t||(e+=" (stub)"),e},u.people.toString=function(){return u.toString(1)+" (stub)"},o="capture register unregister opt_out_capturing opt_in_capturing has_opted_out_capturing set_config".split(" "),n=0;n<o.length;n++)g(u,o[n]);e._i.push([i,s,a])},e.__SV=1)}(document,window.posthog||[]);posthog.init("${POSTHOG_KEY}",{api_host:location.origin+"/r",ui_host:"https://us.posthog.com",persistence:"localStorage",person_profiles:"identified_only",capture_pageview:true,capture_pageleave:true,autocapture:true,enable_heatmaps:true,capture_dead_clicks:true,capture_exceptions:true,capture_performance:{web_vitals:true,network_timing:true},session_recording:{maskAllInputs:true},disable_surveys:true,respect_dnt:true})}</script>`;
+const WEB_ANALYTICS = `<script>if(!(navigator.doNotTrack=="1"||window.doNotTrack=="1"||navigator.globalPrivacyControl)){!function(t,e){var o,n,p,r;e.__SV||(window.posthog&&window.posthog.__loaded)||(window.posthog=e,e._i=[],e.init=function(i,s,a){function g(t,e){var o=e.split(".");2==o.length&&(t=t[o[0]],e=o[1]),t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}}(p=t.createElement("script")).type="text/javascript",p.crossOrigin="anonymous",p.async=!0,p.src=s.api_host.replace(".i.posthog.com","-assets.i.posthog.com")+"/static/array.js",(r=t.getElementsByTagName("script")[0]).parentNode.insertBefore(p,r);var u=e;for(void 0!==a?u=e[a]=[]:a="posthog",u.people=u.people||[],u.toString=function(t){var e="posthog";return"posthog"!==a&&(e+="."+a),t||(e+=" (stub)"),e},u.people.toString=function(){return u.toString(1)+" (stub)"},o="capture register unregister opt_out_capturing opt_in_capturing has_opted_out_capturing set_config".split(" "),n=0;n<o.length;n++)g(u,o[n]);e._i.push([i,s,a])},e.__SV=1)}(document,window.posthog||[]);posthog.init("${POSTHOG_KEY}",{api_host:location.origin+"/r",ui_host:"https://us.posthog.com",persistence:"localStorage",person_profiles:"identified_only",capture_pageview:true,capture_pageleave:true,autocapture:true,enable_heatmaps:true,capture_dead_clicks:true,capture_exceptions:true,capture_performance:{web_vitals:true,network_timing:true},session_recording:{maskAllInputs:true,blockSelector:"[data-no-record]"},disable_surveys:true,respect_dnt:true})}</script>`;
 const BEACON = WEB_ANALYTICS;
 
 // The contributors page: its #wall gets the table credits-cli.mjs rendered

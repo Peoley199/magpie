@@ -77,8 +77,14 @@ type sums struct {
 	unpriced                             int
 }
 
+// add counts r in s. A try that failed and handed the request on
+// (usage.Record.HandedOn) is counted for what it billed, not as a call:
+// the request is the row that ends it, and every such try has a row now,
+// a 429 too (Dazzle_sys on X).
 func (s *sums) add(r usage.Record, cost float64, priced bool) {
-	s.calls++
+	if !r.HandedOn {
+		s.calls++
+	}
 	s.input += int64(r.Input)
 	s.output += int64(r.Output)
 	s.cacheRead += int64(r.CacheRead)
@@ -127,6 +133,15 @@ func (s *sums) tokens(l *access.Limit) int64 {
 		n += s.cacheRead
 	}
 	return n
+}
+
+// allTokens is every token spent in the window, cache reads included. Cost
+// reservations price an estimate of the full request body (cached context
+// included) against s.cost (which includes cache-read cost), so the rate
+// uses all tokens regardless of whether a token cap counts cache reads
+// (#7803).
+func (s *sums) allTokens() int64 {
+	return s.input + s.output + s.cacheWrite + s.cacheRead
 }
 
 type held struct {
@@ -693,7 +708,7 @@ func reserve(who access.Identity, body int64, model string, now time.Time) (rele
 		}
 		x := &holds[j]
 		if l.Cost > 0 && x.cost == 0 {
-			s, used := ss[i], ss[i].tokens(l)
+			s, used := ss[i], ss[i].allTokens()
 			if used > 0 && s.cost > 0 {
 				x.cost = float64(x.est) * s.cost / float64(used)
 			} else if p, ok := priceOf(model); ok {

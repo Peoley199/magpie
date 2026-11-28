@@ -41,10 +41,14 @@ window.davForm = function (v) {
   const [agentsL, agents] = tick(t("Agents' models"), v.agents !== false);
   const [libL, lib] = tick(t("Library: instructions, MCP servers, skills, hooks, subagents and Claude plugins"), v.library !== false);
   const [memL, mem] = tick(t("Memory: what the agents know, merged memory by memory"), v.memory !== false);
-  const keysShow = () => { keysL.hidden = !prov.checked; };
+  // rarely changed: under Advanced, open when one is set away from its default
+  // only the providers' list and keys sync, each provider's settings stay
+  // on this computer (StudyingPython on X). This computer's choice, never
+  // in the setup text
+  const [ownL, own] = tick(t("Sync only the providers' list and API keys"), !!v.providerSettingsHere);
+  const keysShow = () => { keysL.hidden = ownL.hidden = !prov.checked; };
   keysShow();
   prov.onchange = keysShow;
-  // rarely changed: under Advanced, open when one is set away from its default
   const [profL, prof] = tick(t("Profiles"), v.profiles !== false);
   // usage: off unless picked, each computer its own (#542)
   const [useL, use] = tick(t("Usage: this computer's calls, for the Usage page on the others"), !!v.usage);
@@ -57,36 +61,40 @@ window.davForm = function (v) {
   // server's never come in, and none here is taken away
   let except = [...(v.signInsExcept || [])];
   const exL = el("div", "sync-sub-tick sync-except");
-  const exPick = el("button", "proto pick");
-  exPick.type = "button";
-  const subName = (id) => providers?.providers?.find((p) => p.id === id)?.name || id;
-  const exPaint = () => {
-    exPick.classList.toggle("set", !!except.length);
-    exPick.replaceChildren(el("span", "", !except.length ? t("None") : except.length > 2 ? t("{n} subscriptions", { n: except.length }) : except.map(subName).join(", ")), svg(CHEV, 11, 1.6));
-  };
-  exPaint();
-  if (except.length && !providers) loadProviders().catch(() => {}).then(exPaint);
-  exPick.onclick = async (e) => {
-    e.stopPropagation();
-    if (exPick.classList.contains("open")) return closeProtoMenu();
-    if (!providers) { exPick.classList.add("busy"); await loadProviders().catch(() => {}); exPick.classList.remove("busy"); if (!exPick.isConnected) return; }
-    const opts = (providers?.providers || []).filter((p) => p.account).map((p) => ({ v: p.id, name: p.name || p.id, note: "", literalName: true }));
-    // one left out that isn't here now stays to be ticked back
-    for (const id of except) if (!opts.some((o) => o.v === id)) opts.push({ v: id, name: id, note: "", literalName: true });
-    if (!opts.length) opts.push({ v: "\x00", name: "No subscriptions yet", note: "" });
-    openProtoMenu(exPick, opts, except, (ids) => { except = ids; exPaint(); }, "Not synced", "", "left", true);
-  };
+  const exPick = el("div", "sync-except-pick");
+  // one left out that isn't here now stays, to be taken out of the field
+  const exDraw = () => provCombo("provField", exPick, {
+    items: (providers?.providers || []).filter((p) => p.account).map((p) => ({ id: p.id, name: p.name || p.id, icon: p.icon })),
+    value: except, label: "Not synced", placeholder: "None", empty: "No subscriptions yet", pick: (ids) => { except = ids; exDraw(); },
+  });
+  exDraw();
+  if (!providers) loadProviders().catch(() => {}).then(() => exPick.isConnected && exDraw());
   exL.append(el("span", "", t("Not synced")), exPick);
   const siShow = () => { siSay.hidden = exL.hidden = !si.checked; };
   siShow();
   si.onchange = siShow;
+  // GitHub's: who the commits are by (IceCodeNew, #4579). GitHub Actions'
+  // bot unless another is named, so no sync counts in the token owner's
+  // contributions; a GitHub App's bot can go here. Sent only when it isn't
+  // the default, or wasn't before
+  const def = v.commitDefault || {};
+  const gitName = input(gh.gitName || def.name || "", t("Name"));
+  const gitEmail = input(gh.gitEmail || def.email || "", t("Email"), "email");
+  gitName.setAttribute("aria-label", t("Name"));
+  gitEmail.setAttribute("aria-label", t("Email"));
+  const asDefault = el("button", "text sync-commit-default", t("Use default"));
+  const commitL = el("div", "sync-commit-as");
+  commitL.append(el("span", "", t("Commit as")), gitName, gitEmail, asDefault);
+  const commitSay = el("div", "hint sync-commit-say", t("A GitHub App's bot: <slug>[bot] and <app id>+<slug>[bot]@users.noreply.github.com"));
+  const commitDefault = () => { const n = gitName.value.trim(), m = gitEmail.value.trim(); return !n && !m || n === def.name && m === def.email; };
+  const defShow = () => { asDefault.hidden = commitDefault(); };
+  for (const i of [gitName, gitEmail]) i.addEventListener("input", defShow);
+  defShow();
+  asDefault.onclick = () => { gitName.value = def.name || ""; gitEmail.value = def.email || ""; defShow(); };
   const what = el("div", "stack");
   what.append(provL, keysL, setL, agentsL, libL, memL);
-  const adv = el("details", "more advanced sync-advanced");
-  adv.open = v.profiles === false || !!v.usage || !!v.signIns;
-  const advIn = el("div", "stack");
-  advIn.append(profL, useL, siL, exL, siSay, el("div", "hint", t("Usage goes as a file a day: times, tokens, models and costs, never what was said. Turn it on on each computer that shares its own.")));
-  adv.append(el("summary", "", t("Advanced")), advIn);
+  const [adv, advIn] = advFold({ cls: "advanced sync-advanced", editor: true, inner: "stack", open: v.profiles === false || !!v.usage || !!v.signIns || !!v.providerSettingsHere || !!gh.gitName });
+  advIn.append(commitL, commitSay, ownL, profL, useL, siL, exL, siSay, el("div", "hint", t("Usage goes as a file a day: times, tokens, models and costs, never what was said. Turn it on on each computer that shares its own.")));
   const davFields = [...field(t("Address"), url, t("A folder named magpie is made in it.")),
     ...field(t("User"), user),
     ...field(t("Password"), pass)];
@@ -110,6 +118,7 @@ window.davForm = function (v) {
     for (const x of davFields) x.hidden = kind !== "webdav";
     for (const x of s3Fields) x.hidden = kind !== "s3";
     for (const x of ghFields) x.hidden = kind !== "github";
+    commitL.hidden = commitSay.hidden = kind !== "github";
     where.textContent = !active ? ""
       : kind === active ? (other ? t("Syncing here now. The {other} settings are kept, not synced to: pick {other} to see them.", { other }) : t("Syncing here now."))
       : t("{active} is synced to now. Saving moves sync here; the {active} settings are kept for moving back.", { active: syncNames[active] });
@@ -149,6 +158,8 @@ window.davForm = function (v) {
     } else if (kind === "github") {
       const m = /^github:\/\/([^/]+\/[^/]+)\/?(.*)$/i.exec(s.url);
       repo.value = m?.[1] || ""; ghPrefix.value = m?.[2] || ""; branch.value = s.branch || ""; token.value = s.password || "";
+      gitName.value = s.gitName || def.name || ""; gitEmail.value = s.gitEmail || def.email || ""; defShow();
+      if (s.gitName) adv.open = true;
     } else { url.value = s.url; user.value = s.user || ""; pass.value = s.password || ""; }
     keys.checked = !!s.keys; agents.checked = !!s.agents; lib.checked = !!s.library; mem.checked = !!s.memory; use.checked = !!s.usage; si.checked = !!s.signIns;
     // left out only when the setup says so: one from before the choice syncs them
@@ -193,9 +204,14 @@ window.davForm = function (v) {
     const ghFolder = ghPrefix.value.trim().replace(/^\/+|\/+$/g, "");
     if (kind === "github" && !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) return t("Name the GitHub repository as owner/repo");
     if (kind === "github" && !gh.passwordSet && !token.value.trim()) return t("Enter a GitHub token with Contents read and write permission");
+    const asName = gitName.value.trim(), asEmail = gitEmail.value.trim(), custom = !commitDefault();
+    if (kind === "github" && custom && (!asName || !asEmail)) return t("Give the name and the email commits are made as, or Use default");
+    if (kind === "github" && custom && !/^[^\s<>@]+@[^\s<>@.]+(\.[^\s<>@.]+)+$/.test(asEmail)) return t("The email commits are made as must be an address");
+    if (kind === "github" && custom && /[<>]/.test(asName)) return t("The name commits are made as can't have < or > in it");
     if (!v.passphraseSet && !phrase.value) return t("Pick a passphrase: the file is sealed with it");
     const where = kind === "github"
-      ? { url: "github://" + repository + (ghFolder ? "/" + ghFolder : ""), branch: branch.value.trim(), password: token.value.trim() }
+      ? { url: "github://" + repository + (ghFolder ? "/" + ghFolder : ""), branch: branch.value.trim(), password: token.value.trim(),
+        ...(custom || gh.gitName ? { gitName: custom ? asName : "", gitEmail: custom ? asEmail : "" } : {}) }
       : kind === "s3"
       ? { url: "s3://" + b + (p ? "/" + p : ""), user: keyID.value.trim(), password: secret.value, endpoint: endpoint.value.trim(), region: region.value.trim(), pathStyle: pathStyle.checked }
       : { url: url.value.trim(), user: user.value.trim(), password: pass.value };
@@ -203,7 +219,7 @@ window.davForm = function (v) {
     // so a setup from before the choice is saved as it was
     const outs = {};
     for (const [k, c] of [["providers", prov], ["settings", sets], ["profiles", prof]]) if (!c.checked || v[k] === false) outs[k] = c.checked;
-    return { ...where, passphrase: phrase.value, keys: keys.checked, agents: agents.checked, library: lib.checked, memory: mem.checked, ...outs, ...(use.checked || v.usage ? { usage: use.checked } : {}), ...(si.checked || v.signIns ? { signIns: si.checked } : {}), ...(except.length || v.signInsExcept?.length ? { signInsExcept: except } : {}) };
+    return { ...where, passphrase: phrase.value, keys: keys.checked, agents: agents.checked, library: lib.checked, memory: mem.checked, ...outs, ...(use.checked || v.usage ? { usage: use.checked } : {}), ...(si.checked || v.signIns ? { signIns: si.checked } : {}), ...(own.checked || v.providerSettingsHere ? { providerSettingsHere: own.checked } : {}), ...(except.length || v.signInsExcept?.length ? { signInsExcept: except } : {}) };
   };
   peek.onclick = async () => {
     if (!(await openPasted())) return;
@@ -431,7 +447,7 @@ window.askSyncPreview = function (plan, go) {
     const head = el("div", "ehead");
     head.append(el("b", "", t("Preview of the sync")));
     ed.append(head);
-    const by = (d) => plan.parts.filter((p) => p.do === d);
+    const by = (d) => (plan.parts ?? []).filter((p) => p.do === d);
     const items = (p) => {
       const list = el("div", "sync-items");
       const shown = (p.items || []).slice(0, 8);

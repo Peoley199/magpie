@@ -733,12 +733,12 @@ func CodexCatalog(shown []Entry) []catalog.Model {
 
 // CodexNativeHidden is the ChatGPT account's own model slugs the user took
 // out of Codex's list (HiddenModels), or didn't pick for it when it is
-// shown only the models picked (PickedModels): the backend lists them, and
-// the gateway drops them from its /models answer as it does the ones not
-// picked.
+// shown only the models picked (PickedModels), or turned off for every
+// agent (AgentsOff): the backend lists them, and the gateway drops them
+// from its /models answer as it does the ones not picked.
 func CodexNativeHidden() map[string]bool {
 	_, only := PickedModels("codex")
-	if !only && len(HiddenModels("codex")) == 0 {
+	if !only && len(HiddenModels("codex")) == 0 && len(AgentsOff()) == 0 {
 		return nil
 	}
 	off := ModelOff("codex")
@@ -868,6 +868,10 @@ func buildCodexListTag(kind string) string {
 	// that isn't the working window
 	if n := settings.Load().ForAgent("codex").Compact(); n != settings.WorkingWindow {
 		ms = append(ms, catalog.Model{ID: "~compact", Context: n})
+	}
+	// and the percent of that window Codex compacts at (AgentCompactPcts)
+	if p := settings.Load().CompactPercent("codex"); p > 0 {
+		ms = append(ms, catalog.Model{ID: "~compactpct", Context: p})
 	}
 	// and the model Codex's auto-review runs on (#938)
 	if v := codexcat.AutoReviewModel(); v != "" {

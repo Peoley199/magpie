@@ -55,6 +55,10 @@ type artifactJSON struct {
 	SharedVersion int    `json:"sharedVersion,omitempty"`
 }
 
+// artifactsJSON is the artifacts as the Library's page lists them, at
+// this computer's address wherever agents' links point (SetArtifactsAt):
+// the app opens them here, and artifacts.js moves them to the page's own
+// address in a browser on another computer.
 func artifactsJSON() ([]artifactJSON, error) {
 	list, err := artifact.List()
 	if err != nil {
@@ -75,10 +79,10 @@ func artifactsJSON() ([]artifactJSON, error) {
 	}
 	for _, a := range list {
 		j := artifactJSON{ID: a.ID, Title: a.Title, Description: a.Description, Created: a.Created, Updated: a.Updated,
-			URL: gateway.ArtifactURL(a.ID, 0), Versions: make([]artifactVersionJSON, 0, len(a.Versions))}
+			URL: gateway.ArtifactLocalURL(a.ID, 0), Versions: make([]artifactVersionJSON, 0, len(a.Versions))}
 		for i := len(a.Versions) - 1; i >= 0; i-- {
 			v := a.Versions[i]
-			vj := artifactVersionJSON{N: v.N, At: v.At, Label: v.Label, Agent: v.Agent, Files: len(v.Files), Size: v.Size, URL: gateway.ArtifactURL(a.ID, v.N)}
+			vj := artifactVersionJSON{N: v.N, At: v.At, Label: v.Label, Agent: v.Agent, Files: len(v.Files), Size: v.Size, URL: gateway.ArtifactLocalURL(a.ID, v.N)}
 			if v.Agent != "" && v.Agent != artifact.PageAgent {
 				vj.AgentName = nameOf(v.Agent)
 			}
@@ -160,6 +164,20 @@ func artifactRoutes(mux *http.ServeMux) {
 			return
 		}
 		writeJSON(rw, map[string]any{"url": sh.URL, "version": sh.Version})
+	})
+	// the shared page, opened as its owner: a one-time code in its link
+	mux.HandleFunc("POST /api/artifacts/owner-link", func(rw http.ResponseWriter, r *http.Request) {
+		var in struct{ ID string }
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(rw, err)
+			return
+		}
+		u, err := artifact.OwnerLink(r.Context(), in.ID)
+		if err != nil {
+			fail(rw, err)
+			return
+		}
+		writeJSON(rw, map[string]string{"url": u})
 	})
 	mux.HandleFunc("POST /api/artifacts/unshare", func(rw http.ResponseWriter, r *http.Request) {
 		var in struct{ ID string }

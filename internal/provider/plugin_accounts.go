@@ -319,6 +319,9 @@ func pluginOfAgent(agent string) (plugin.Provider, bool) {
 func pluginLoginList(pp plugin.Provider) []Login { return loginsOf(pluginSide(pp)) }
 
 func switchPluginLogin(pp plugin.Provider, user string) error {
+	if pp.ID == agyCLIID && agySwitchesKeyring() { // agy's own sign-in moves (#1908)
+		return switchAgyLogin(pp, user)
+	}
 	return switchSideLogin(pluginAgent(pp), user, pluginSide(pp))
 }
 
@@ -389,12 +392,13 @@ func signOutPlugin(pp plugin.Provider, key string) error {
 	return plugin.SignOut(ctx, pp.ID, key)
 }
 
-// pluginAlsoOn is the provider's accounts in use behind the first.
-func pluginAlsoOn(pp plugin.Provider) []Provider {
+// pluginAlsoOn is the provider's accounts in use behind the first;
+// withOff, those turned off too, marked off.
+func pluginAlsoOn(pp plugin.Provider, withOff bool) []Provider {
 	var out []Provider
 	for _, l := range pluginLogins(pp) {
-		if !l.Active && l.On {
-			out = append(out, pluginProvider(pp, l))
+		if !l.Active && (l.On || withOff) {
+			out = append(out, offIf(pluginProvider(pp, l), !l.On))
 		}
 	}
 	return out

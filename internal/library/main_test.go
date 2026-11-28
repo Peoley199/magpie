@@ -14,10 +14,10 @@ import (
 // a temp dir of their own: what they leave in it is theirs, and a skill's
 // download left there fails the run (#2321).
 func TestMain(m *testing.M) {
-	// started as magpie's own image, browser or memory server (Args mcp
-	// image, mcp browser, mcp memory): the fake server, for the hub to
-	// take it for that one
-	if len(os.Args) >= 3 && os.Args[1] == "mcp" && (os.Args[2] == "image" || os.Args[2] == "browser" || os.Args[2] == "memory") {
+	// started as magpie's own image, browser, memory or artifacts server
+	// (Args mcp image, mcp browser, mcp memory, mcp artifacts): the fake
+	// server, for the hub to take it for that one
+	if len(os.Args) >= 3 && os.Args[1] == "mcp" && (os.Args[2] == "image" || os.Args[2] == "browser" || os.Args[2] == "memory" || os.Args[2] == "artifacts") {
 		os.Args = []string{os.Args[0], "-test.run=^TestFakeMCPServer$"}
 	}
 	if os.Getenv(testenv.Marker) != "" {
@@ -34,9 +34,6 @@ func TestMain(m *testing.M) {
 	// Codex given its servers by their commands, as the tests expect;
 	// mcp_run_test.go turns it on
 	runOn = false
-	// Magpie Artifacts left out of the servers the tests count;
-	// artifacts_test.go turns it on
-	offerArtifacts = false
 	code := testenv.Run(m)
 	forgetProbes()
 	if left := leftDownloads(tmp); len(left) > 0 && code == 0 {

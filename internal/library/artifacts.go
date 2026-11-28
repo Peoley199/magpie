@@ -1,23 +1,28 @@
 package library
 
-import (
-	"fmt"
-	"slices"
-)
+import "slices"
 
-// Magpie Artifacts (gateway's artifacts_mcp.go) is given to every agent
-// that can take it, once:
+// Magpie Artifacts (gateway's artifacts_mcp.go) is the user's to add:
 //
-//   - The first Sync after it shipped adds it to the library, ticked for
-//     every agent whose MCP config takes a command (adoptArtifacts), and
-//     records that it did (ArtifactsOffered): a user who removes it, or
-//     unticks an agent, keeps it that way.
-//   - A library that has it already, added by hand, is left as it is.
+//   - Nothing gives it to an agent unasked. It is in the Library's market
+//     (featured), and Work › Artifacts' empty page leads there.
+//   - From 11-24 to 11-25 the first Sync added it, ticked for every agent
+//     whose MCP config takes a command, and recorded ArtifactsOffered.
+//     Users asked why a server and a deny rule appeared that they never
+//     chose, so the first Sync after that takes back the one it added,
+//     once (withdrawArtifacts, ArtifactsWithdrawn): still under its name
+//     and ticked on every agent it was given to. One the user changed
+//     (an agent unticked, renamed) or added again later is theirs.
 //   - Claude Code given it leaves out its own Artifact tool, whose pages
 //     are its claude.ai account's and don't open after magpie switches
 //     that account: a deny rule beside magpie's others (syncToolRules,
-//     claudeArtifactTool), taken back when the server goes. A user's own
-//     rule for Artifact, allow or deny, is theirs.
+//     claudeArtifactTool), taken back when the server goes. It is written
+//     only while the server is really in Claude Code's config, or the
+//     hub's entry is (artifactsGiven). A user's own rule for Artifact,
+//     allow or deny, is theirs, and so is magpie's deny once the user
+//     took it out by hand (ArtifactOwn): every start put it back (seiry on
+//     #7646, rosu_h on X) until the server goes. The market's text says
+//     so, for the user to know before they add it.
 
 // ArtifactsServerName is the name Magpie Artifacts' server is written
 // under, the name the gateway's own artifacts server goes by (ownMCP).
@@ -31,6 +36,13 @@ const (
 	artifactPublish = "publish_artifact"
 )
 
+// artifactsDirect are its tools Pi declares to its model whole: the
+// publish, the guide to what a page calls (artifactGuideTool) and the
+// data a page keeps (artifactDataTool). Behind codemode, a Pi writing a
+// poll page never found the last two: it read the page runtime's source
+// for the calls and seeded the data with curl (11-24).
+var artifactsDirect = []string{artifactPublish, "artifact_guide", "artifact_data"}
+
 // claudeArtifactTool is Claude Code's own tool for artifacts, as its
 // permission rules name it.
 const claudeArtifactTool = "Artifact"
@@ -41,58 +53,54 @@ const claudeArtifactTool = "Artifact"
 // with the folder the agent started it in.
 func artifactsServer() MarketServer {
 	return localServer(ArtifactsServerName, "Magpie Artifacts", "Magpie", "https://usemagpie.ai/favicon.png", "https://usemagpie.ai",
-		"Pages your agents make for you (reports, charts, diagrams, prototypes, small apps), kept on this computer with every version and opened in your browser, whichever account made them.", magpieCommand, []string{"mcp", "artifacts"})
+		"Pages your agents make for you (reports, charts, diagrams, prototypes, small apps), kept on this computer with every version and opened in your browser, whichever account made them. For Claude Code it takes the place of its own Artifact tool: magpie adds \"Artifact\" to permissions.deny in ~/.claude/settings.json while Claude Code has it. Delete that line to keep both.", magpieCommand, []string{"mcp", "artifacts"})
 }
 
-// offerArtifacts is whether Sync gives Magpie Artifacts to the agents;
-// the package's tests that count servers turn it off.
-var offerArtifacts = true
-
-// adoptArtifacts adds Magpie Artifacts once; true when it changed the
-// library.
-func (l *Library) adoptArtifacts() bool {
-	if l.ArtifactsOffered || !offerArtifacts {
+// withdrawArtifacts takes back, once, the Magpie Artifacts the first
+// Sync of 11-24 added unasked (ArtifactsOffered): the server under its
+// name, ticked on every agent that adding ticked. True when it changed
+// the library.
+func (l *Library) withdrawArtifacts() bool {
+	if !l.ArtifactsOffered || l.ArtifactsWithdrawn {
 		return false
 	}
-	l.ArtifactsOffered = true
-	m := artifactsServer()
-	s := m.server
-	s.Args = slices.Clone(s.Args)
-	selfCommand(&s)
-	if l.haveServer(&s) != "" {
+	l.ArtifactsWithdrawn = true
+	s := l.server(ArtifactsServerName)
+	if s == nil || serverKey(s) != artifactsKey {
 		return true
 	}
-	s.Agents = []string{}
 	for _, t := range Targets() {
-		if t.MCP != nil && t.MCP.supports(&s) == nil && !slices.Contains(s.Agents, t.Agent.ID) {
-			s.Agents = append(s.Agents, t.Agent.ID)
+		if t.MCP != nil && t.MCP.supports(s) == nil && !slices.Contains(s.Agents, t.Agent.ID) {
+			return true // an agent unticked: the user's now
 		}
 	}
-	slices.Sort(s.Agents)
-	base := s.Name
-	for i := 2; l.server(s.Name) != nil; i++ {
-		s.Name = fmt.Sprintf("%s-%d", base, i)
-	}
-	l.MCP = append(l.MCP, &s)
-	if l.Icons == nil {
-		l.Icons = map[string]string{}
-	}
-	l.Icons[serverKey(&s)] = m.Icon
+	_ = removeServer(l, ArtifactsServerName)
 	return true
 }
 
 // artifactsGiven is whether agent id has Magpie Artifacts: ticked on it,
-// and written into its config (given) or reached through the hub.
+// and written into its config (given), or reached through the hub's
+// entry written there. A write that failed gives it nothing: no deny of
+// Claude Code's own then (rosu_h on X).
 func (l *Library) artifactsGiven(id string, given []string) bool {
 	for _, s := range l.MCP {
 		if s == nil || serverKey(s) != artifactsKey || !slices.Contains(s.Agents, id) {
 			continue
 		}
-		if slices.Contains(given, s.Name) || (l.MCPHub && inHub(s, id)) {
+		if slices.Contains(given, s.Name) || (l.MCPHub && inHub(s, id) && slices.Contains(given, HubEntry)) {
 			return true
 		}
 	}
 	return false
+}
+
+// artifactsTicked is whether Magpie Artifacts is ticked on agent id, given
+// or not: the user's Artifact (ArtifactOwn) stays theirs while it is, a
+// write that failed once included.
+func (l *Library) artifactsTicked(id string) bool {
+	return slices.ContainsFunc(l.MCP, func(s *Server) bool {
+		return s != nil && serverKey(s) == artifactsKey && slices.Contains(s.Agents, id)
+	})
 }
 
 // ArtifactsAgents is the agents Magpie Artifacts is ticked on, sorted,

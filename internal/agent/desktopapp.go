@@ -74,8 +74,29 @@ var desktopApps = map[string]desktopApp{
 	// on Discord: ~/.dsh shown as "CLI not found" and wired as the web
 	// profile with that app in use); deepseek-harness-desktop-bin unpacks a
 	// .deb of it into /opt/DeepSeek Harness, electron-builder's folder.
+	//
+	// The community's DSH NEXT and DSH Desktop (github.com/anywhere-labs/
+	// dsh-desktop, dshdesktop.cn; not DeepSeek's) are Electron shells
+	// around the same dsh runtime, on the same home and profile: ~/.dsh,
+	// profiles/desktop (dsh-desktop-next/src/data-directory.ts and
+	// desktop-contract.ts's DEFAULT_PROFILE; dsh-plugin-desktop's
+	// product-identity.ts), so they are dsh's app too (tresgrosplan on X:
+	// DSH NEXT not detected). DSH NEXT 2.0.24-next's arm64 dmg holds DSH
+	// NEXT.app, ai.deepseek.dsh.desktop.next, with the dsh it runs in
+	// Contents/Resources/app/package.json (dshAppVersion). Their package.json
+	// build: per-user NSIS installers under %LOCALAPPDATA%\Programs, the
+	// folder changeable, registered under the UUID v5 of the appId; a deb
+	// into /opt/<productName> with executableName dsh-desktop-next and
+	// dsh-desktop, and no scheme of their own. DSH Desktop Beta
+	// (ai.deepseek.dsh.desktop.beta) is left out: it keeps ~/.dsh-beta.
 	"dsh": {id: "com.deepseek.dsh", names: []string{"DeepSeek Harness.app"}, win: filepath.Join("DeepSeek Harness", "DeepSeek Harness.exe"), guid: "1bf39983-50d0-5fe0-9ef4-cece76f67c5e",
-		onLinux: &linuxApp{dirs: []string{"/usr/lib/deepseek-harness-desktop", "/opt/DeepSeek Harness"}, exe: "deepseek-harness", name: "DeepSeek Harness", scheme: "dsh"}},
+		onLinux: &linuxApp{dirs: []string{"/usr/lib/deepseek-harness-desktop", "/opt/DeepSeek Harness"}, exe: "deepseek-harness", name: "DeepSeek Harness", scheme: "dsh"},
+		more: []desktopApp{
+			{id: "ai.deepseek.dsh.desktop.next", names: []string{"DSH NEXT.app"}, win: filepath.Join("DSH NEXT", "DSH NEXT.exe"), guid: "4a513c97-f710-5eb4-97f6-b8e556e2c341",
+				onLinux: &linuxApp{dirs: []string{"/opt/DSH NEXT"}, exe: "dsh-desktop-next", name: "DSH NEXT"}},
+			{id: "ai.deepseek.dsh.desktop", names: []string{"DSH Desktop.app"}, win: filepath.Join("DSH Desktop", "DSH Desktop.exe"), guid: "85820364-4c28-594e-b046-8896b3669248",
+				onLinux: &linuxApp{dirs: []string{"/opt/DSH Desktop"}, exe: "dsh-desktop", name: "DSH Desktop"}},
+		}},
 	// DS Bot's desktop app (app/electron-builder.yml, 0.3.0: appId
 	// io.github.fei2411.dsbot, productName DS Bot, DS Bot.app; DeepSeek
 	// Bot, its name before) runs a DSH of its own on its data folder
@@ -172,6 +193,41 @@ var desktopApps = map[string]desktopApp{
 	"nowledge-mem": {id: "co.nowledge.mem.desktop", names: []string{"Nowledge Mem.app"}},
 	"codebuddy": {id: "com.tencent.codebuddy", names: []string{"CodeBuddy.app"},
 		more: []desktopApp{{id: "com.tencent.codebuddycn", names: []string{"CodeBuddy CN.app"}}}},
+	// The apps magpie is added to by an import link, each found by its
+	// data folder, which an uninstall leaves behind (macAppRemoved).
+	// Cindy 0.1.94's brand identity: com.xd.cindycn for its cn build (data
+	// in Cindy), com.xd.cindy for its global one (CindyGlobal), both
+	// Cindy.app. AionUi's and Cherry Studio's from their electron-builder.yml.
+	"cindy": {id: "com.xd.cindycn", names: []string{"Cindy.app"},
+		more: []desktopApp{{id: "com.xd.cindy", names: []string{"Cindy.app"}}}},
+	"aionui":       {id: "com.aionui.app", names: []string{"AionUi.app"}},
+	"cherrystudio": {id: "com.kangfenmao.CherryStudio", names: []string{"Cherry Studio.app"}},
+	// Orca (orca.go; v1.4.281's config/electron-builder.config.cjs: appId
+	// com.stablyai.orca, productName Orca, the orca:// scheme). Its
+	// Windows installer is a one-click per-user NSIS one, so it goes to
+	// %LOCALAPPDATA%\Programs\orca (package.json's name) with
+	// executableName Orca, registered under the UUID v5 of the appId. Its
+	// deb and rpm install /opt/Orca, executableName orca-ide, not orca:
+	// GNOME's screen reader has that name.
+	"orca": {id: "com.stablyai.orca", names: []string{"Orca.app"}, win: filepath.Join("orca", "Orca.exe"), guid: "2b325ec9-0ed1-575f-ad70-e08307aee879",
+		onLinux: &linuxApp{dirs: []string{"/opt/Orca"}, exe: "orca-ide", name: "Orca", scheme: "orca"}},
+}
+
+// removedOS is the system macAppRemoved judges for; a var so a test on
+// another one can ask for a Mac's answer.
+var removedOS = runtime.GOOS
+
+// macAppRemoved says the desktop app of agent id is gone from this Mac: no
+// bundle of any of its builds in the app folders, or where Spotlight has
+// one. An app found by its data folder alone (Cindy, AionUi, Cherry
+// Studio) leaves the folder, and its database with magpie in it, behind
+// when it is uninstalled, and its row stayed on the Agents page, added,
+// with nothing to take it off (Alex on Discord, 11-25: Cindy). Never said
+// elsewhere: where these apps install on Windows and Linux is a path
+// magpie hasn't checked, and the folder is taken as it was.
+func macAppRemoved(id string) bool {
+	app, ok := desktopApps[id]
+	return ok && removedOS == "darwin" && !slices.ContainsFunc(app.builds(), macBundle)
 }
 
 // appFolders are where apps are installed; a var so tests can point it
@@ -217,6 +273,17 @@ func storePackages() []string {
 		return nil
 	}
 	return installedWindowsStorePackages()
+}
+
+// windowsStorePackageRoot is the registered install folder of a Store
+// package, empty when it cannot be read or the process is test-isolated
+var windowsStorePackageRoot = storePackageRoot
+
+func storePackageRoot(pkg string) string {
+	if proc.Isolated() {
+		return ""
+	}
+	return installedWindowsStorePackageRoot(pkg)
 }
 
 // windowsRegisteredApp is the folder and version an installer registered
@@ -673,9 +740,15 @@ func (app desktopApp) registered() (dir, version string) {
 // keeps a resource package (…_neutral_split.scale-125_…) of a version the
 // main package has moved past, so one is no sign the app is installed.
 func storeAppVersion(packages []string, name, publisher string) string {
+	_, version := storeAppPackage(packages, name, publisher)
+	return version
+}
+
+// storeAppPackage also keeps the package full name so its registered
+// install folder can be read without enumerating WindowsApps
+func storeAppPackage(packages []string, name, publisher string) (matched, found string) {
 	prefix, suffix := name+"_", "_"+publisher
 	var newest [4]uint64
-	found := ""
 	for _, pkg := range packages {
 		if !strings.HasPrefix(pkg, prefix) || !strings.HasSuffix(pkg, suffix) {
 			continue
@@ -699,10 +772,10 @@ func storeAppVersion(packages []string, name, publisher string) string {
 			}
 		}
 		if valid && (found == "" || slices.Compare(version[:], newest[:]) > 0) {
-			newest, found = version, fields[0]
+			newest, matched, found = version, pkg, fields[0]
 		}
 	}
-	return found
+	return matched, found
 }
 
 // HasApp reports whether the agent's desktop app is installed here: its

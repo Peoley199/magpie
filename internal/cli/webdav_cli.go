@@ -27,7 +27,7 @@ const webdavUsage = `usage:
                                           magpie is made in it), and sync at once; asks for the password
                                           (with a user) and the passphrase
   magpie webdav set k=v…                  change it: address, user, providers, settings, profiles, keys, agents,
-                                          library, memory, usage, sign-ins (yes|no);
+                                          library, memory, usage, sign-ins, provider-settings-here (yes|no);
                                           password= and passphrase= ask for a new one
   magpie webdav now                       sync now (the gateway also syncs by itself while it runs: see auto)
   magpie webdav preview                   what syncing now would change, here and on the server; nothing is changed
@@ -64,6 +64,11 @@ const webdavUsage = `usage:
               the subscriptions whose sign-ins stay on this computer, by id (claude,codex): theirs
               here never go up, the server's never come in, and nothing here is taken away;
               none: every one syncs
+  provider-settings-here
+              yes: only the providers' list and their keys sync; each provider's settings (models,
+              routing, limits, headers, proxy, prices, on or off) stay on this computer. A key's URLs
+              go with it. A provider new here comes with the settings it was made with. Off unless
+              set, and set on each computer
   first sync  on a computer that had its own setup, each part that differs becomes the server's; what
               was here is kept in the sync folder beside magpie's files, and magpie webdav says so
   moving      magpie webdav on with S3 sync on moves sync to the folder; the bucket, endpoint, access key
@@ -86,7 +91,7 @@ const s3Usage = `usage:
                                           and sync at once; asks for the secret and the passphrase
   magpie s3 set k=v…                      change it: address, bucket, prefix, endpoint, region, access-key-id,
                                           path-style, providers, settings, profiles, keys, agents, library, memory,
-                                          usage, sign-ins (yes|no); secret= and
+                                          usage, sign-ins, provider-settings-here (yes|no); secret= and
                                           passphrase= ask for a new one
   magpie s3 now                           sync now (the gateway also syncs by itself while it runs: see auto)
   magpie s3 preview                       what syncing now would change, here and on the server; nothing is changed
@@ -124,6 +129,11 @@ const s3Usage = `usage:
               the subscriptions whose sign-ins stay on this computer, by id (claude,codex): theirs
               here never go up, the server's never come in, and nothing here is taken away;
               none: every one syncs
+  provider-settings-here
+              yes: only the providers' list and their keys sync; each provider's settings (models,
+              routing, limits, headers, proxy, prices, on or off) stay on this computer. A key's URLs
+              go with it. A provider new here comes with the settings it was made with. Off unless
+              set, and set on each computer
   moving      magpie s3 on with WebDAV sync on moves sync to the bucket; the WebDAV address, user and
               password are kept, and magpie webdav on alone moves back to them
 
@@ -138,8 +148,8 @@ const githubUsage = `usage:
   magpie github                           whether sync is on, where to, and how the last sync went
   magpie github on github://owner/repo[/folder] [branch=…] [keys=no] [agents=no] [library=no]
                                           keep the encrypted setup in an existing GitHub repository; asks for a token and passphrase
-  magpie github set k=v…                  change it: address, branch, providers, settings, profiles, keys, agents,
-                                          library, memory, usage, sign-ins (yes|no)
+  magpie github set k=v…                  change it: address, branch, commit-as, providers, settings, profiles, keys, agents,
+                                          library, memory, usage, sign-ins, provider-settings-here (yes|no)
   magpie github now                       sync now
   magpie github preview                   what syncing now would change, here and on the server; nothing is changed
   magpie github undo-sync [anyway]        put back what the last sync brought in, on this computer only
@@ -157,10 +167,15 @@ const githubUsage = `usage:
              The first sync initializes an empty repository's default branch;
              other branches must already exist.
   passphrase the same on every computer; GitHub only ever receives the sealed file.
+  commit-as  who the sync's commits are by, as "name <email>"; default: ` + davsync.DefaultCommitName + `,
+             so they count in no one's contributions. A GitHub App's bot:
+             "<slug>[bot] <<app id>+<slug>[bot]@users.noreply.github.com>". The token still writes
   sign-ins   yes: the subscriptions' accounts and the plugins' sign-ins go too, sealed with the
              passphrase. Off unless set
   sign-ins-except
              the subscriptions whose sign-ins stay on this computer, by id (claude,codex)
+  provider-settings-here
+             yes: only the providers' list and keys sync; each provider's settings stay on this computer
   providers, settings, profiles, agents, library, memory
              no: that part stays as it is on each computer, never brought in nor sent up
 `
@@ -328,10 +343,11 @@ func syncSet(k syncKind, args []string, on bool) error {
 		if !on {
 			return fmt.Errorf("%s sync is on, not %s: magpie %s set changes it; %s", c.Kind(), k.name, strings.ToLower(c.Kind()), k.turnOn())
 		}
-		next := davsync.Config{Passphrase: c.Passphrase, Keys: c.Keys, Agents: c.Agents, Library: c.Library, Memory: c.Memory, Usage: c.Usage, SignIns: c.SignIns, SignInsExcept: c.SignInsExcept,
+		next := davsync.Config{Passphrase: c.Passphrase, Keys: c.Keys, Agents: c.Agents, Library: c.Library, Memory: c.Memory, Usage: c.Usage, SignIns: c.SignIns, SignInsExcept: c.SignInsExcept, ProviderSettingsHere: c.ProviderSettingsHere,
 			Providers: c.Providers, Settings: c.Settings, Profiles: c.Profiles}
 		if o, ok := c.Kept(k.name); ok { // its server, as it was kept when sync moved from it
 			next.URL, next.User, next.Endpoint, next.Region, next.PathStyle, next.Branch = o.URL, o.User, o.Endpoint, o.Region, o.PathStyle, o.Branch
+			next.GitName, next.GitEmail = o.GitName, o.GitEmail
 		}
 		c = next
 	}
@@ -365,6 +381,10 @@ func syncSet(k syncKind, args []string, on bool) error {
 			c.User = v
 		case key == "branch" && k.cmd == "github":
 			c.Branch = v
+		case key == "commit-as" && k.cmd == "github": // "name <email>", or default
+			if c.GitName, c.GitEmail, ok = commitAs(v); !ok {
+				return fmt.Errorf("commit-as=\"name <email>\" or commit-as=default, not %q", v)
+			}
 		case key == "bucket" && k.cmd == "s3":
 			bucket = &v
 		case key == "prefix" && k.cmd == "s3":
@@ -393,7 +413,7 @@ func syncSet(k syncKind, args []string, on bool) error {
 				}
 			}
 		case key == "keys", key == "agents", key == "library", key == "usage", key == "sign-ins", key == "path-style" && k.cmd == "s3",
-			key == "providers", key == "settings", key == "profiles", key == "memory":
+			key == "providers", key == "settings", key == "profiles", key == "memory", key == "provider-settings-here":
 			if v != "yes" && v != "no" {
 				return fmt.Errorf("%s=yes|no, not %q", key, v)
 			}
@@ -409,6 +429,8 @@ func syncSet(k syncKind, args []string, on bool) error {
 				c.Usage = yes
 			case "sign-ins":
 				c.SignIns = yes
+			case "provider-settings-here":
+				c.ProviderSettingsHere = yes
 			case "providers":
 				c.Providers = &yes
 			case "settings":
@@ -421,11 +443,11 @@ func syncSet(k syncKind, args []string, on bool) error {
 				c.Library = &yes
 			}
 		case k.cmd == "s3":
-			return fmt.Errorf("unknown field %q (address, bucket, prefix, endpoint, region, access-key-id, secret, passphrase, path-style, providers, settings, profiles, keys, agents, library, memory, usage, sign-ins, sign-ins-except)", key)
+			return fmt.Errorf("unknown field %q (address, bucket, prefix, endpoint, region, access-key-id, secret, passphrase, path-style, providers, settings, profiles, keys, agents, library, memory, usage, sign-ins, sign-ins-except, provider-settings-here)", key)
 		case k.cmd == "github":
-			return fmt.Errorf("unknown field %q (address, branch, token, passphrase, providers, settings, profiles, keys, agents, library, memory, usage, sign-ins, sign-ins-except)", key)
+			return fmt.Errorf("unknown field %q (address, branch, commit-as, token, passphrase, providers, settings, profiles, keys, agents, library, memory, usage, sign-ins, sign-ins-except, provider-settings-here)", key)
 		default:
-			return fmt.Errorf("unknown field %q (address, user, password, passphrase, providers, settings, profiles, keys, agents, library, memory, usage, sign-ins, sign-ins-except)", key)
+			return fmt.Errorf("unknown field %q (address, user, password, passphrase, providers, settings, profiles, keys, agents, library, memory, usage, sign-ins, sign-ins-except, provider-settings-here)", key)
 		}
 	}
 	if bucket != nil || prefix != nil {
@@ -497,6 +519,22 @@ func syncSet(k syncKind, args []string, on bool) error {
 	return nil
 }
 
+// commitAs is commit-as's "name <email>": the two parts, or none for
+// default (davsync checks what they are).
+func commitAs(v string) (name, email string, ok bool) {
+	v = strings.TrimSpace(v)
+	if strings.EqualFold(v, "default") {
+		return "", "", true
+	}
+	name, rest, ok := strings.Cut(v, "<")
+	email, tail, closed := strings.Cut(rest, ">")
+	if !ok || !closed || strings.TrimSpace(tail) != "" {
+		return "", "", false
+	}
+	name, email = strings.TrimSpace(name), strings.TrimSpace(email)
+	return name, email, name != "" && email != ""
+}
+
 // s3Parts are an s3:// address's bucket and prefix.
 func s3Parts(address string) (bucket, prefix string) {
 	rest, _ := strings.CutPrefix(strings.TrimSpace(address), "s3://")
@@ -566,6 +604,9 @@ func syncShow(k syncKind) error {
 		if v.Branch != "" {
 			who = append(who, v.Branch)
 		}
+		if v.GitName != "" {
+			who = append(who, "commits as "+v.GitName+" <"+v.GitEmail+">")
+		}
 		if v.PasswordSet {
 			who = append(who, "token saved")
 		}
@@ -611,6 +652,9 @@ func syncShow(k syncKind) error {
 		}
 	}
 	fmt.Println("  syncs", strings.Join(what, ", "))
+	if v.Providers && v.ProviderSettingsHere {
+		fmt.Println(muted.Render("  only the providers' list and keys sync; their settings stay on this computer (provider-settings-here=no syncs them)"))
+	}
 	if left := leftOut(v); len(left) > 0 {
 		fmt.Println(muted.Render("  stays as it is on each computer: " + strings.Join(left, ", ")))
 	}

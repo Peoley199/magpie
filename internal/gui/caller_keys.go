@@ -33,10 +33,14 @@ type keyModelJSON struct {
 	Name         string `json:"name"`
 	Provider     string `json:"provider,omitempty"`
 	ProviderName string `json:"providerName,omitempty"`
-	Group        bool   `json:"group,omitempty"`   // a routing group (Magic_zero on Discord)
-	Account      bool   `json:"account,omitempty"` // a signed-in account the key may be held to (#905)
-	Key          bool   `json:"key,omitempty"`     // one of a provider's keys, by its KeyID
-	Plan         string `json:"plan,omitempty"`    // the account's subscription, for the menu's note
+	// Icon and Icons: its provider's logo, a group's providers' stacked,
+	// for the model picker a key's model names are picked in
+	Icon    string   `json:"icon,omitempty"`
+	Icons   []string `json:"icons,omitempty"`
+	Group   bool     `json:"group,omitempty"`   // a routing group (Magic_zero on Discord)
+	Account bool     `json:"account,omitempty"` // a signed-in account the key may be held to (#905)
+	Key     bool     `json:"key,omitempty"`     // one of a provider's keys, by its KeyID
+	Plan    string   `json:"plan,omitempty"`    // the account's subscription, for the menu's note
 	// Decides marks a decision model (Jev, Clef…), which no agent lists:
 	// a key held to some models reaches it at /v1/systemone, and another
 	// magpie lists it, only when it is picked (Kautism on Discord)
@@ -103,10 +107,10 @@ func callerKeyRoutes(mux *http.ServeMux) {
 				// by the id magpie keeps it by, group/<id>, as a key held to it
 				// before names it: a found group's auto/<model> passes for it
 				// (gateway's allows), and its name is what the picker shows
-				out = append(out, keyModelJSON{ID: provider.GroupPrefix + e.Group, Name: cmp.Or(e.Name, e.Group), Group: true})
+				out = append(out, keyModelJSON{ID: provider.GroupPrefix + e.Group, Name: cmp.Or(e.Name, e.Group), Group: true, Icons: e.Icons})
 				continue
 			}
-			out = append(out, keyModelJSON{ID: e.Provider.ID + "/" + e.Model, Name: cmp.Or(e.Name, e.Model), Provider: e.Provider.ID, ProviderName: cmp.Or(e.Provider.Name, e.Provider.ID)})
+			out = append(out, keyModelJSON{ID: e.Provider.ID + "/" + e.Model, Name: cmp.Or(e.Name, e.Model), Provider: e.Provider.ID, ProviderName: cmp.Or(e.Provider.Name, e.Provider.ID), Icon: e.Provider.Icon})
 		}
 		// the decision groups, after the chat groups: Catalog keeps them
 		// out as no agent chats with one, but the gateway gives a key
@@ -144,7 +148,7 @@ func callerKeyRoutes(mux *http.ServeMux) {
 			if slices.ContainsFunc(out, func(m keyModelJSON) bool { return strings.EqualFold(m.ID, id) }) {
 				continue
 			}
-			m := keyModelJSON{ID: id, Name: cmp.Or(e.Name, e.Model), Provider: e.Provider.ID, ProviderName: cmp.Or(e.Provider.Name, e.Provider.ID)}
+			m := keyModelJSON{ID: id, Name: cmp.Or(e.Name, e.Model), Provider: e.Provider.ID, ProviderName: cmp.Or(e.Provider.Name, e.Provider.ID), Icon: e.Provider.Icon}
 			at := len(out)
 			for i := len(out) - 1; i >= 0; i-- {
 				if out[i].Provider == m.Provider {
@@ -165,7 +169,7 @@ func callerKeyRoutes(mux *http.ServeMux) {
 			if slices.ContainsFunc(out, func(m keyModelJSON) bool { return strings.EqualFold(m.ID, id) }) {
 				continue
 			}
-			m := keyModelJSON{ID: id, Name: cmp.Or(e.Name, e.Model), Provider: e.Provider.ID, ProviderName: cmp.Or(e.Provider.Name, e.Provider.ID), Decides: true}
+			m := keyModelJSON{ID: id, Name: cmp.Or(e.Name, e.Model), Provider: e.Provider.ID, ProviderName: cmp.Or(e.Provider.Name, e.Provider.ID), Icon: e.Provider.Icon, Decides: true}
 			at := len(out)
 			for i := len(out) - 1; i >= 0; i-- {
 				if out[i].Provider == m.Provider {
@@ -275,7 +279,8 @@ func callerKeyRoutes(mux *http.ServeMux) {
 	// ticking or unticking some of them, written to each key's own models
 	mux.HandleFunc("GET /api/provider-keys", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
-		keys, err := access.ProviderKeys(r.URL.Query().Get("provider"))
+		pid := r.URL.Query().Get("provider")
+		keys, err := access.ProviderKeys(pid, groupRefs(pid))
 		if err != nil {
 			fail(w, err)
 			return
@@ -298,11 +303,12 @@ func callerKeyRoutes(mux *http.ServeMux) {
 		for _, p := range provider.All() {
 			ids = append(ids, p.ID)
 		}
-		if err := access.SetProviderKeys(in.Provider, in.Add, in.Remove, ids); err != nil {
+		groups := groupRefs(in.Provider)
+		if err := access.SetProviderKeys(in.Provider, in.Add, in.Remove, ids, groups); err != nil {
 			fail(w, err)
 			return
 		}
-		keys, err := access.ProviderKeys(in.Provider)
+		keys, err := access.ProviderKeys(in.Provider, groups)
 		if err != nil {
 			fail(w, err)
 			return
@@ -360,4 +366,67 @@ func accountGroupsJSON() []access.AccountGroup {
 		return []access.AccountGroup{}
 	}
 	return gs
+}
+
+// groupRefs are the routing groups as they reach provider pid, for its
+// side of the keys: a key that names a group is sent to every member of
+// it, so one that may have a member of pid's reaches pid through it. A
+// group reaches pid when a member it names is pid's, a group in it does,
+// a pattern of its may match a model of pid's (a regular expression may
+// match any), a member it resolves to now is pid's, or it follows a
+// template (Group.Template): magpie picks its members again from the
+// user's models as they change, so a model of pid's may join it later
+// with no save by the user, and a key held to it would reach pid then.
+func groupRefs(pid string) []access.GroupRef {
+	pid = strings.TrimSpace(pid)
+	all := provider.Groups()
+	byID := map[string]provider.Group{}
+	for _, g := range all {
+		byID[strings.ToLower(g.ID)] = g
+	}
+	find := provider.GroupFinder()
+	var reaches func(g provider.Group, seen map[string]bool) bool
+	reaches = func(g provider.Group, seen map[string]bool) bool {
+		if seen[strings.ToLower(g.ID)] {
+			return false
+		}
+		seen[strings.ToLower(g.ID)] = true
+		if g.Template != "" {
+			return true
+		}
+		for _, m := range slices.Concat(g.Members, g.Matched) {
+			if id, ok := strings.CutPrefix(m, provider.GroupPrefix); ok {
+				if in, ok := byID[strings.ToLower(id)]; ok && reaches(in, seen) {
+					return true
+				}
+				continue
+			}
+			if head, _, _ := strings.Cut(m, "/"); strings.EqualFold(strings.TrimSpace(head), pid) {
+				return true
+			}
+		}
+		for _, p := range g.Match {
+			head, _, ok := strings.Cut(p, "/")
+			if access.IsPattern(p) || !ok || access.ModelAllowed([]string{head}, pid) {
+				return true
+			}
+		}
+		if _, ms, ok := find(provider.GroupPrefix + g.ID); ok {
+			for _, m := range ms {
+				if strings.EqualFold(m.Provider.ID, pid) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	out := make([]access.GroupRef, 0, len(all))
+	for _, g := range all {
+		refs := []string{provider.GroupPrefix + g.ID}
+		if ref := g.Ref(); ref != refs[0] {
+			refs = append(refs, ref)
+		}
+		out = append(out, access.GroupRef{Refs: refs, Found: g.Auto || strings.HasPrefix(g.ID, "auto-"), Reaches: reaches(g, map[string]bool{})})
+	}
+	return out
 }

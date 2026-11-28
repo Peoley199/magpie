@@ -66,6 +66,11 @@ type Account struct {
 	// Code's own while Claude Code is signed out (claude_dirs.go).
 	standIn bool
 
+	// off is an account the user turned off, made only for a test sent
+	// to it before it is turned on (testAccounts): routing never takes
+	// one (AlsoOn leaves them out).
+	off bool
+
 	// unnamed is Claude Code's own sign-in while it is known by no name:
 	// User is a name made from its plan ("Claude Max") until Claude Code
 	// puts the account's profile in its config, as its first run does.
@@ -456,8 +461,15 @@ func claudePlan(sub, tier string) string { return claudePlanShown(sub, tier, "")
 // "Claude <name>" ("Ultra" for a Max 20x account, none for Max 5x). A
 // known tier decides; the name is read only when the tier doesn't say,
 // so a profile left from another account can't rename this one.
+//
+// The tier decides a Pro account too: Claude Code keeps the subscription
+// type it was signed in with (subscriptionType, "the stored login plan")
+// and renews only the tier from the profile, so an account upgraded from
+// Pro to Max still says "pro" beside a Max tier (CoderMaurice on X: the
+// editor read "Claude Pro" while the account drew Max's Fable window).
+// A Team or Enterprise seat is named as it is, whatever its seat's tier.
 func claudePlanShown(sub, tier, shown string) string {
-	if sub != "max" {
+	if sub != "max" && sub != "pro" {
 		return sub
 	}
 	switch {
@@ -465,8 +477,12 @@ func claudePlanShown(sub, tier, shown string) string {
 		return "ultra"
 	case strings.Contains(tier, "max_5x"):
 		return "max"
-	case strings.EqualFold(strings.TrimSpace(shown), "ultra"):
+	}
+	switch name := strings.ToLower(strings.TrimSpace(shown)); {
+	case name == "ultra" && (sub == "max" || tier == ""):
 		return "ultra"
+	case name == "max" && tier == "":
+		return "max"
 	}
 	return sub
 }
@@ -1506,7 +1522,25 @@ var copilotRefusals = struct {
 	sync.Mutex
 	at     map[string]time.Time
 	status map[string]int
-}{at: map[string]time.Time{}, status: map[string]int{}}
+	said   map[string]error
+}{at: map[string]time.Time{}, status: map[string]int{}, said: map[string]error{}}
+
+// copilotRefusedQuiet is how long a token GitHub refused isn't traded
+// again: every try of a request, and an agent's own retries, traded it
+// anew, 15 times a request, each one refused the same.
+const copilotRefusedQuiet = 5 * time.Minute
+
+// copilotRefusedLately is the error GitHub's refusal of token gave, while
+// it is under copilotRefusedQuiet old.
+func copilotRefusedLately(token string) error {
+	copilotRefusals.Lock()
+	defer copilotRefusals.Unlock()
+	at, ok := copilotRefusals.at[token]
+	if err := copilotRefusals.said[token]; ok && err != nil && time.Since(at) < copilotRefusedQuiet {
+		return err
+	}
+	return nil
+}
 
 func copilotRefusedToken(token string) bool {
 	copilotRefusals.Lock()
@@ -1524,11 +1558,19 @@ func copilotStaleToken(token string) bool {
 	return copilotRefusals.status[token] == http.StatusUnauthorized
 }
 
-func copilotRefuse(token string, status int) {
+func copilotRefuse(token string, status int) { copilotRefuseSaying(token, status, nil) }
+
+// copilotRefuseSaying is copilotRefuse with the error the trade gave, given
+// again without asking for a while (copilotRefusedLately).
+func copilotRefuseSaying(token string, status int, said error) {
 	copilotRefusals.Lock()
 	defer copilotRefusals.Unlock()
 	copilotRefusals.at[token] = time.Now()
 	copilotRefusals.status[token] = status
+	if copilotRefusals.said == nil {
+		copilotRefusals.said = map[string]error{}
+	}
+	copilotRefusals.said[token] = said
 }
 
 // copilotStandIn is the Copilot CLI's sign-in of the same account as a,
@@ -1726,6 +1768,14 @@ func copilotToken(ctx context.Context, app copilotApp) (copilotSession, error) {
 	if s, ok := copilotSessions[github]; ok && time.Until(time.Unix(s.ExpiresAt, 0)) > 2*time.Minute {
 		return s, nil
 	}
+	// GitHub turned it away under its terms, or refused it a moment ago:
+	// not asked again till then (copilot_tos.go)
+	if err := copilotHeld(github); err != nil {
+		return copilotSession{}, err
+	}
+	if err := copilotRefusedLately(github); err != nil {
+		return copilotSession{}, err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, copilotTokenURL(app.Host), nil)
 	if err != nil {
 		return copilotSession{}, err
@@ -1743,15 +1793,21 @@ func copilotToken(ctx context.Context, app copilotApp) (copilotSession, error) {
 	b, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
 	var s copilotSession
 	if res.StatusCode != 200 || json.Unmarshal(b, &s) != nil || s.Token == "" {
-		if res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden {
-			copilotRefuse(github, res.StatusCode)
+		if copilotToSRefused(res.StatusCode, b) {
+			// the account's use, not its token: held, not signed out
+			return copilotSession{}, copilotToSHeld(github, res.Header, res.Status, b)
 		}
-		return copilotSession{}, errors.New("Copilot is signed out (" + APIError(b, res.Status) + "); sign in to Copilot again")
+		err := errors.New("Copilot is signed out (" + APIError(b, res.Status) + "); sign in to Copilot again")
+		if res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden {
+			copilotRefuseSaying(github, res.StatusCode, err)
+		}
+		return copilotSession{}, err
 	}
 	copilotSessions[github] = s
 	copilotRefusals.Lock()
 	delete(copilotRefusals.at, github)
 	delete(copilotRefusals.status, github)
+	delete(copilotRefusals.said, github)
 	copilotRefusals.Unlock()
 	return s, nil
 }

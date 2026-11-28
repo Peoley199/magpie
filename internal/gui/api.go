@@ -344,6 +344,12 @@ type stateJSON struct {
 	// window offers to make theirs again; "" when magpie can save
 	ConfigBlocked string            `json:"configBlocked,omitempty"`
 	Settings      settings.Settings `json:"settings"`
+	// JSRoutings are the routings JS gateway plugins serve now
+	// ("<plugin>/<name>"), for every routing picker: here, not only in
+	// settingsJSON, which the page reads on Settings alone, so a page
+	// drawn from a state read anew (after each change) still offers them
+	// (guhailin3 on X, #6026)
+	JSRoutings []middleware.Routing `json:"jsRoutings"`
 	// FX is the dollar-to-yuan rate the cny currency choice shows costs at,
 	// here too (not only in settingsJSON) so a cost drawn before the reader
 	// ever opens Settings already converts, if cny was chosen last time.
@@ -453,9 +459,6 @@ type settingsJSON struct {
 	// PanelKeys is whether the quick panel's shortcut can be set here
 	// (panelkey.go)
 	PanelKeys panelKeysJSON `json:"panelKeys"`
-	// JSRoutings are the routings JS gateway plugins serve now
-	// ("<plugin>/<name>"), for the routing pickers
-	JSRoutings []middleware.Routing `json:"jsRoutings"`
 	// PublicURL is MAGPIE_PUBLIC_URL while other machines are let in
 	// (shared, or MAGPIE_ADDR on the network): where they reach the
 	// gateway, shown beside the local address agents here are pointed at
@@ -476,6 +479,9 @@ type settingsJSON struct {
 	AllowIPsEnv     string   `json:"allowIPsEnv,omitempty"`
 	AllowIPsFromEnv []string `json:"allowIPsFromEnv,omitempty"`
 	OnNetwork       bool     `json:"onNetwork,omitempty"`
+	// InContainer: magpie runs in a container, where MAGPIE_ADDR on the
+	// network is how its port is published at all
+	InContainer bool `json:"inContainer,omitempty"`
 	// the client certificates issued and still good (mtls.go), while
 	// other computers can reach magpie or mTLS is on; MTLSSaved: the
 	// folder the one just issued was saved to
@@ -493,6 +499,9 @@ type settingsJSON struct {
 	// WSL is whether there is WSL to look in for agents (Windows), for
 	// Settings' Detect agents in WSL (#1264)
 	WSL bool `json:"wsl,omitempty"`
+	// GPU is Linux's GPU rendering row (gpurender.go): magpie's pick,
+	// this run's, and the WEBKIT_* variables the user set; nil elsewhere
+	GPU *gpuJSON `json:"gpu,omitempty"`
 	// Rekeyed is what an agent beyond loopback, given the sharing key,
 	// couldn't be set again with when sharing changed (agent.Rekey)
 	Rekeyed string `json:"rekeyed,omitempty"`
@@ -608,6 +617,10 @@ type settingsJSON struct {
 	GitHubTokenRefused bool `json:"githubTokenRefused,omitempty"`
 	// whether a Bark device key is set; never the key (EV_John_Liu on X)
 	BarkKeySet bool `json:"barkKeySet,omitempty"`
+	// whether a Telegram bot's token and a Discord webhook are set; never
+	// either (gandli on X)
+	TelegramSet bool `json:"telegramSet,omitempty"`
+	DiscordSet  bool `json:"discordSet,omitempty"`
 	// where other machines reach the gateway while it is shared
 	LANURLs []string `json:"lanURLs,omitempty"`
 	// LANURLs are a container's own addresses, not the host's: the page
@@ -894,8 +907,8 @@ func settingsState() settingsJSON {
 	s.Log = tilde(applog.Current())
 	s.Builtins = builtinsState()
 	s.PanelKeys = panelKeysState()
-	s.JSRoutings = middleware.Routings()
 	s.OnNetwork = gateway.OnNetwork()
+	s.InContainer = s.OnNetwork && gateway.InContainer()
 	if list, env := gateway.AllowIPs(); env {
 		s.AllowIPsEnv, s.AllowIPsFromEnv = os.Getenv(gateway.AllowIPsEnv), list
 	}
@@ -908,11 +921,14 @@ func settingsState() settingsJSON {
 		s.PublicKind = gateway.URLKind(s.PublicURL)
 	}
 	s.WSL = runtime.GOOS == "windows"
+	s.GPU = gpuRow()
 	s.Web = webPage.Load()
 	s.GatewayOn, s.GatewayWhy = gatewayMode(s.Web)
 	s.GatewayPaused = pausedNow()
 	s.LANKey = "" // the retained credential belongs on disk, not in UI state
 	s.BarkKeySet, s.BarkKey = strings.TrimSpace(s.BarkKey) != "", ""
+	s.TelegramSet, s.TelegramToken = strings.TrimSpace(s.TelegramToken) != "", ""
+	s.DiscordSet, s.DiscordWebhook = strings.TrimSpace(s.DiscordWebhook) != "", ""
 	// the GitHub token, masked, and where the library's requests take one
 	// from: Settings, or the environment variable named
 	own := strings.TrimSpace(s.GitHubToken)
@@ -1232,6 +1248,7 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 	}
 	mux := http.NewServeMux()
 	page := devPage(revalidated(http.FileServer(http.FS(staticFS()))))
+	markRoutes(mux, page)
 	mux.Handle("/", http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		if warmsSessions(r) {
 			warmSessions()
@@ -1352,6 +1369,12 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		// and the accent and wallpaper of the user's own (appearance.go),
 		// drawn before the first paint
 		boot["look"] = lookKey(s)
+		// and the time zone this magpie is set to (Settings' timeZone,
+		// JackyFill on X), the page's from the first line: tzshim.js
+		// puts Date and Intl in it, after bootPrefs, below
+		if s.TimeZone != "" && settings.ValidTimeZone(s.TimeZone) {
+			boot["timeZone"] = s.TimeZone
+		}
 		b, _ := json.Marshal(boot)
 		rw.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 		rw.Header().Set("Cache-Control", "no-store")
@@ -1363,10 +1386,17 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 			t, _ := json.Marshal(n + " · magpie")
 			out = append(append(append(out, "document.title = "...), t...), ";\n"...)
 		}
+		// and the icons and window colours in the accent (webappmark.go)
+		out = append(out, markBoot(markOf(s))...)
 		if css := lookCSS(s); css != "" {
 			c, _ := json.Marshal(css)
 			out = append(out, `(function(){var e=document.createElement("style");e.id="lookCSS";e.textContent=`...)
 			out = append(append(out, c...), ";document.head.appendChild(e)})();\n"...)
+		}
+		if _, ok := boot["timeZone"]; ok {
+			if js, err := fs.ReadFile(staticFS(), "tzshim.js"); err == nil {
+				out = append(out, js...)
+			}
 		}
 		rw.Write(out)
 	})
@@ -2133,6 +2163,23 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		}
 		writeJSON(rw, settingsState())
 	})
+	// where in its window an agent compacts, a percent
+	// (settings.AgentCompactPcts): 0 is the agent's own default
+	mux.HandleFunc("POST /api/settings/agent-compact-pct", func(rw http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Agent string
+			Pct   int
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(rw, err)
+			return
+		}
+		if err := provider.SetAgentCompactPct(in.Agent, in.Pct); err != nil {
+			fail(rw, err)
+			return
+		}
+		writeJSON(rw, settingsState())
+	})
 	// the windows one agent is told, apart from every other's
 	// (settings.AgentContexts): Contexts replaces them, none takes them away
 	mux.HandleFunc("POST /api/settings/agent-contexts", func(rw http.ResponseWriter, r *http.Request) {
@@ -2486,6 +2533,21 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 			return
 		}
 		if err := provider.SetCodexResetLead(in.Minutes); err != nil {
+			fail(rw, err)
+			return
+		}
+		writeJSON(rw, settingsState())
+	})
+	// which Codex resets are spent by themselves, by the days they have
+	// left: at least Least and at most Most, 0 for no bound (both 0 is
+	// every one, the default)
+	mux.HandleFunc("POST /api/settings/codex-reset-days", func(rw http.ResponseWriter, r *http.Request) {
+		var in struct{ Least, Most int }
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(rw, err)
+			return
+		}
+		if err := provider.SetCodexResetDays(in.Least, in.Most); err != nil {
 			fail(rw, err)
 			return
 		}
@@ -3075,6 +3137,7 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 			fail(rw, err)
 			return
 		}
+		summaryNeedsChannel(&s)
 		if err := settings.Save(s); err != nil {
 			fail(rw, err)
 			return
@@ -3089,10 +3152,84 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 			fail(rw, fmt.Errorf("no Bark device key is set"))
 			return
 		}
-		title, body := barkTestText(trayLang(s.Lang, systemLang))
+		title, body := barkTestText(trayLang(s.Lang, systemLang), "Bark")
 		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 		defer cancel()
 		if err := bark.Push(ctx, t, title, body); err != nil {
+			fail(rw, err)
+			return
+		}
+		writeJSON(rw, map[string]bool{"ok": true})
+	})
+	// a Telegram bot's token and chat, and a Discord webhook, that every
+	// alert and the daily summary also go to (gandli on X). A field left
+	// out stays; "" takes it away. The token and the webhook are written
+	// and never read back by the page.
+	mux.HandleFunc("POST /api/settings/alert-channels", func(rw http.ResponseWriter, r *http.Request) {
+		var in struct {
+			TelegramToken  *string `json:"telegramToken"`
+			TelegramChat   *string `json:"telegramChat"`
+			DiscordWebhook *string `json:"discordWebhook"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(rw, err)
+			return
+		}
+		s := settings.Load()
+		if in.TelegramToken != nil {
+			s.TelegramToken = *in.TelegramToken
+		}
+		if in.TelegramChat != nil {
+			s.TelegramChat = *in.TelegramChat
+		}
+		if in.DiscordWebhook != nil {
+			s.DiscordWebhook = *in.DiscordWebhook
+		}
+		if err := settings.CheckTelegram(s.TelegramToken, s.TelegramChat); err != nil {
+			fail(rw, err)
+			return
+		}
+		if err := settings.CheckDiscord(s.DiscordWebhook); err != nil {
+			fail(rw, err)
+			return
+		}
+		summaryNeedsChannel(&s)
+		if err := settings.Save(s); err != nil {
+			fail(rw, err)
+			return
+		}
+		writeJSON(rw, settingsState())
+	})
+	// a message to the saved Telegram chat or Discord webhook, to see that
+	// it arrives
+	mux.HandleFunc("POST /api/alert-channels/test", func(rw http.ResponseWriter, r *http.Request) {
+		var in struct {
+			To string `json:"to"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			fail(rw, err)
+			return
+		}
+		s := settings.Load()
+		var c *channel
+		for _, x := range channels(s) {
+			if x.name == in.To && x.name != "bark" {
+				c = &x
+			}
+		}
+		name := map[string]string{"telegram": "Telegram", "discord": "Discord"}[in.To]
+		if name == "" {
+			fail(rw, fmt.Errorf("no such alert channel: %q", in.To))
+			return
+		}
+		if c == nil {
+			fail(rw, fmt.Errorf("%s isn't set", name))
+			return
+		}
+		title, body := barkTestText(trayLang(s.Lang, systemLang), name)
+		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+		defer cancel()
+		if err := c.send(ctx, title, body); err != nil {
 			fail(rw, err)
 			return
 		}
@@ -3347,6 +3484,7 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 		rw.WriteHeader(http.StatusNoContent)
 	})
 	agentModelsAPI(mux)
+	agentsOffAPI(mux)
 	speedsAPI(mux)
 	modelPriceRoutes(mux)
 	devListen(mux)
@@ -3394,9 +3532,13 @@ func held(h http.Handler) http.Handler {
 			// 5x the CPU.
 			defer tightenGC()()
 		}
-		if !(api && r.Method == http.MethodGet) && r.URL.Path != "/api/update/using" && r.URL.Path != "/api/page-away" {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead && r.URL.Path != "/api/update/using" && r.URL.Path != "/api/page-away" {
 			// anything that may have written drops what was held, once it
-			// has answered with it (a page's word of input writes nothing)
+			// has answered with it (a page's word of input writes nothing).
+			// A GET writes nothing, under /api or not: the page's own
+			// files, icons and logos each dropped every provider's, agent's
+			// and catalog's lists, ~90 a page open, and the next read
+			// built them all again (#2278)
 			defer provider.Changed()
 		}
 		h.ServeHTTP(rw, r)
@@ -3408,12 +3550,14 @@ func held(h http.Handler) http.Handler {
 // read of the last one (lastKnown), which puts today's settings in it
 func stateSettings(s settings.Settings) settings.Settings {
 	s.Proxies, s.LANKey, s.BarkKey, s.GitHubToken = nil, "", "", ""
+	s.TelegramToken, s.DiscordWebhook = "", ""
 	return s
 }
 
 func state() stateJSON {
 	s := stateJSON{Agents: []agentJSON{}, Profiles: []profileJSON{}, Catalog: catalog.Source(), Settings: settings.Shared()} // only encoded, never changed
 	s.Settings = stateSettings(s.Settings)
+	s.JSRoutings = middleware.Routings()
 	// state() is asked for after nearly every click, so the rate — a
 	// network fetch once every TTL — is only worth its rare latency when
 	// cny is actually chosen; usd never looks at it
@@ -3795,6 +3939,35 @@ func writeJSONRows[T any](rw http.ResponseWriter, r *http.Request, key string, r
 	return tag
 }
 
+// joinPIDs is pids as "12, 34", for an error's map of strings.
+func joinPIDs(pids []int) string {
+	s := make([]string, len(pids))
+	for i, p := range pids {
+		s[i] = strconv.Itoa(p)
+	}
+	return strings.Join(s, ", ")
+}
+
+// agyUnlistedSaid is a refused agy switch when the processes couldn't be
+// listed, in an i18n.js key.
+const agyUnlistedSaid = "magpie couldn't tell whether agy or the Antigravity app is running, so nothing was changed. Try again"
+
+// agyRunningSaid is a refused agy switch in an i18n.js key, its pids in
+// {pids} (the plugin's among them) and {plugin}. The plugin's agy alone
+// needs no quitting: it ends by itself.
+func agyRunningSaid(r provider.AgyRunning) string {
+	agy := len(r.PIDs) > 0 || len(r.Plugin) > 0 && r.App
+	switch {
+	case r.App && agy:
+		return "Quit the Antigravity app and agy (pid {pids}) first: while they run they keep the account they started on and write it back over a switch. Nothing was changed"
+	case r.App:
+		return "Quit the Antigravity app first: while it runs it keeps the account it started on and writes it back over a switch. Nothing was changed"
+	case len(r.PIDs) > 0:
+		return "Quit agy (pid {pids}) first: while it runs it keeps the account it started on and writes it back over a switch. Nothing was changed"
+	}
+	return "The Antigravity CLI plugin's agy (pid {plugin}) is still on agy's account; it ends by itself within ten minutes, then switch. Nothing was changed"
+}
+
 func fail(rw http.ResponseWriter, err error) {
 	rw.Header().Set("Content-Type", "application/json")
 	rw.WriteHeader(http.StatusBadRequest)
@@ -3836,6 +4009,16 @@ func fail(rw http.ResponseWriter, err error) {
 		out["error"] = redactProxyErr(out["error"])
 		out["said"] = unreachableSaid[unreachable.Proxy != ""]
 	}
+	// a switch of agy's sign-in refused while agy or the Antigravity app
+	// runs on it (#1908): what runs, said in the reader's language
+	var agyRunning *provider.AgyRunning
+	if errors.As(err, &agyRunning) {
+		out["code"], out["said"], out["pids"], out["plugin"] = "agy_running", agyRunningSaid(*agyRunning), joinPIDs(append(slices.Clone(agyRunning.PIDs), agyRunning.Plugin...)), joinPIDs(agyRunning.Plugin)
+	}
+	var agyUnlisted *provider.AgyUnlistedError
+	if errors.As(err, &agyUnlisted) {
+		out["code"], out["said"] = "agy_unlisted", agyUnlistedSaid
+	}
 	var noModels *agent.NoModelsError
 	if errors.As(err, &noModels) {
 		out["code"] = "no_models"
@@ -3853,6 +4036,11 @@ func fail(rw http.ResponseWriter, err error) {
 		if signedIn.Only {
 			out["code"] = "signed_in_only"
 		}
+	}
+	// a shared group usemagpie.ai took down, or no site to share on: an
+	// i18n.js key (said)
+	if code, said := groupGone(err); code != "" {
+		out["code"], out["said"] = code, said
 	}
 	// a text that isn't a group to import (laincatx on X), said in the
 	// reader's language

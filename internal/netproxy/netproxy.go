@@ -13,6 +13,7 @@ package netproxy
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"net/http"
@@ -75,20 +76,36 @@ func HTTP2Health() *http.HTTP2Config {
 // context names (With), or else the global one, which a host on the
 // user's own network goes around (onLAN).
 func Func(req *http.Request) (*url.URL, error) {
+	p, _, err := ForRequest(req)
+	return p, err
+}
+
+// ForRequest picks the same proxy as Func and says whether it came from
+// an explicit provider or magpie setting.
+func ForRequest(req *http.Request) (p *url.URL, configured bool, err error) {
 	if err := Held(req.Context()); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if loopback(req.URL.Hostname()) {
-		return nil, nil
+		return nil, false, nil
 	}
 	if c := choiceOf(req.Context()); c != "" {
-		return forChoice(c)
+		p, err := forChoice(c)
+		return p, p != nil, err
 	}
-	p, err := For(req.URL)
+	c := strings.TrimSpace(settings.Shared().Proxy)
+	p, err = forURL(req.URL, c)
 	if p != nil && onLAN(req.URL.Hostname()) {
-		return nil, nil
+		return nil, false, nil
 	}
-	return p, err
+	if p == nil {
+		return nil, false, err
+	}
+	if c != "" {
+		return p, true, err
+	}
+	ep, _ := fromEnv(req.URL)
+	return p, ep != nil, err
 }
 
 type choiceKey struct{}
@@ -250,6 +267,7 @@ type dispatch struct {
 type route struct {
 	choice    string
 	h1        bool
+	whole     bool // wholeRecords
 	unchecked string
 	client    string // clientRoute
 	resolve   string // resolveRoute
@@ -261,10 +279,19 @@ func (d *dispatch) RoundTrip(req *http.Request) (*http.Response, error) {
 			return res, err
 		}
 	}
+	if res, ok, err := failingOver(req, d.send); ok {
+		return res, err
+	}
+	return d.send(req)
+}
+
+// send is RoundTrip at one address.
+func (d *dispatch) send(req *http.Request) (*http.Response, error) {
 	if d.moved() {
 		d.CloseIdleConnections()
 	}
-	r := route{choice: Resolve(choiceOf(req.Context())), h1: HTTP1 != nil && HTTP1(req.URL) || http1Asked(req) || overHTTP1(req.Context()) || h2BrokenFor(req), unchecked: uncheckedHost(req), client: clientRoute(req), resolve: resolveRoute(req)}
+	broken := h2BrokenFor(req)
+	r := route{choice: Resolve(choiceOf(req.Context())), h1: HTTP1 != nil && HTTP1(req.URL) || http1Asked(req) || overHTTP1(req.Context()) || broken, whole: broken, unchecked: uncheckedHost(req), client: clientRoute(req), resolve: resolveRoute(req)}
 	t := d.base
 	if r != (route{}) {
 		t = d.transport(r)
@@ -277,13 +304,14 @@ func (d *dispatch) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 	}
 	res, err := v4Retry(t, req)
-	if r.h1 {
-		return res, err
-	}
 	if err != nil {
 		if recordError(err) {
+			// over HTTP/1.1 too: the tries after it go in whole records
 			markH2Broken(req)
 		}
+		return res, err
+	}
+	if r.h1 {
 		return res, err
 	}
 	if res.ProtoMajor == 2 && res.Body != nil && res.Body != http.NoBody {
@@ -346,6 +374,9 @@ func (d *dispatch) transport(r route) *http.Transport {
 	if r.h1 {
 		http1Only(t)
 	}
+	if r.whole {
+		wholeRecords(t)
+	}
 	if r.unchecked != "" {
 		uncheckTLS(t)
 	}
@@ -380,6 +411,26 @@ func http1Only(t *http.Transport) {
 	}
 }
 
+// wholeRecords has t, a clone, write a request in TLS records as large as
+// TLS allows, as OpenSSL does (curl, Python): Go starts each connection
+// on records of about one TCP segment and grows them a segment a record
+// for its first 128KB (DynamicRecordSizingDisabled), and net/http hands
+// TLS a request's head and first bytes 4KB at a time (WriteBufferSize),
+// so a 70KB body went out as a dozen or more small records, each its own
+// write. Behind a fake-IP proxy whose path mangled
+// Go's requests ("tls: bad record MAC", over HTTP/1.1 too) while curl and
+// Python's were answered every time (#7567, k0ngk0ng), the requests to a
+// host after a record error (h2Broken) go out in the shape that got
+// through: a 64KB buffer, written as 16KB records. Nothing else of the
+// connection changes: its hello, its ciphers, its protocol.
+func wholeRecords(t *http.Transport) {
+	if t.TLSClientConfig == nil {
+		t.TLSClientConfig = &tls.Config{}
+	}
+	t.TLSClientConfig.DynamicRecordSizingDisabled = true
+	t.WriteBufferSize = 64 << 10
+}
+
 // CloseIdleConnections closes base's and every proxy's own.
 func (d *dispatch) CloseIdleConnections() {
 	d.base.CloseIdleConnections()
@@ -392,7 +443,11 @@ func (d *dispatch) CloseIdleConnections() {
 
 // For is the proxy a request to u goes through; nil means direct.
 func For(u *url.URL) (*url.URL, error) {
-	switch s := strings.TrimSpace(settings.Shared().Proxy); s {
+	return forURL(u, strings.TrimSpace(settings.Shared().Proxy))
+}
+
+func forURL(u *url.URL, s string) (*url.URL, error) {
+	switch s {
 	case "direct":
 		return nil, nil
 	case "":

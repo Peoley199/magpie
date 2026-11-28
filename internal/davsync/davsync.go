@@ -85,8 +85,14 @@ type Config struct {
 	PathStyle bool   `json:"pathStyle,omitempty"`
 	// GitHub alone: an empty branch uses the repository's default branch.
 	Branch string `json:"branch,omitempty"`
-	Keys   bool   `json:"keys"`   // providers carry their API keys
-	Agents bool   `json:"agents"` // the agents' models go too
+	// GitHub alone: who the sync's commits are by, its author and
+	// committer (#4579). Both empty, as in a setup made before the
+	// choice, is DefaultCommitName and DefaultCommitEmail, so no sync
+	// counts in the token owner's contribution graph.
+	GitName  string `json:"gitName,omitempty"`
+	GitEmail string `json:"gitEmail,omitempty"`
+	Keys     bool   `json:"keys"`   // providers carry their API keys
+	Agents   bool   `json:"agents"` // the agents' models go too
 	// Providers, Settings and Profiles are whether each of those parts
 	// goes; nil, as in a setup made before they could be left out, is yes.
 	// A part left out stays as it is on each computer (jinpwng on X,
@@ -118,6 +124,17 @@ type Config struct {
 	// copy goes on as it was for the computers that sync them. None, as
 	// in a setup made before the choice, leaves none out.
 	SignInsExcept []string `json:"signInsExcept,omitempty"`
+	// ProviderSettingsHere keeps each provider's settings on this
+	// computer, so only the list and the keys sync (provider.WithoutSettings;
+	// StudyingPython on X: "只希望同步供应商的key和列表，不希望同步供应商设置"):
+	// a setting made here (models, routing, limits, headers, proxy, on or
+	// off…) never goes up, and the server's never comes in for a provider
+	// here, while providers added, removed, renamed or given a new key
+	// sync as ever. A provider new here takes the settings it came with,
+	// and one new on the server goes up with this computer's. Off, as in a
+	// setup made before the choice, the settings go with their providers.
+	// The choice is this computer's: the setup text doesn't carry it.
+	ProviderSettingsHere bool `json:"providerSettingsHere,omitempty"`
 	// Other is the most recently left server, retained for older clients.
 	// Servers holds every inactive kind. Nothing syncs to them.
 	Other *Server `json:"other,omitempty"`
@@ -164,14 +181,18 @@ type Server struct {
 	Region    string `json:"region,omitempty"`
 	PathStyle bool   `json:"pathStyle,omitempty"`
 	Branch    string `json:"branch,omitempty"`
+	GitName   string `json:"gitName,omitempty"`
+	GitEmail  string `json:"gitEmail,omitempty"`
 }
 
 func (c Config) where() Server {
-	return Server{URL: c.URL, User: c.User, Password: c.Password, Endpoint: c.Endpoint, Region: c.Region, PathStyle: c.PathStyle, Branch: c.Branch}
+	return Server{URL: c.URL, User: c.User, Password: c.Password, Endpoint: c.Endpoint, Region: c.Region, PathStyle: c.PathStyle, Branch: c.Branch,
+		GitName: c.GitName, GitEmail: c.GitEmail}
 }
 
 func (s Server) config() Config {
-	return Config{URL: s.URL, User: s.User, Password: s.Password, Endpoint: s.Endpoint, Region: s.Region, PathStyle: s.PathStyle, Branch: s.Branch}
+	return Config{URL: s.URL, User: s.User, Password: s.Password, Endpoint: s.Endpoint, Region: s.Region, PathStyle: s.PathStyle, Branch: s.Branch,
+		GitName: s.GitName, GitEmail: s.GitEmail}
 }
 
 // Kept is an inactive server, including setups saved before Servers existed.
@@ -280,6 +301,10 @@ type state struct {
 	// AgentsHere) as the last sync left them: an agent turned so since is
 	// a change the next sync settles, its hashes made as before it.
 	Here []string `json:"here,omitempty"`
+	// Settings is Config.ProviderSettingsHere as the last sync had it, for
+	// the same reason as Here: turning it on or off is no change on either
+	// side.
+	Settings bool `json:"providerSettings,omitempty"`
 	// SignIns is the sign-ins (id → hash) the last sync left both on the
 	// server and here: one gone from a side since was removed there. Nil
 	// when not known (never synced with them, or a blind write went
@@ -351,11 +376,15 @@ func Configure(c Config) error {
 	c.URL, c.User = strings.TrimSpace(c.URL), strings.TrimSpace(c.User)
 	c.Endpoint, c.Region = strings.TrimSpace(c.Endpoint), strings.TrimSpace(c.Region)
 	c.Branch = strings.TrimSpace(c.Branch)
+	c.GitName, c.GitEmail = strings.TrimSpace(c.GitName), strings.TrimSpace(c.GitEmail)
+	if c.GitName == DefaultCommitName && c.GitEmail == DefaultCommitEmail {
+		c.GitName, c.GitEmail = "", "" // the default as typed stays the default
+	}
 	if !c.S3() { // WebDAV's own: nothing of an S3 setup left behind
 		c.Endpoint, c.Region, c.PathStyle = "", "", false
 	}
 	if !c.GitHub() {
-		c.Branch = ""
+		c.Branch, c.GitName, c.GitEmail = "", "", ""
 	} else {
 		c.User = ""
 		c.Password = strings.TrimSpace(c.Password)
@@ -554,16 +583,25 @@ type View struct {
 	Region        string `json:"region,omitempty"`
 	PathStyle     bool   `json:"pathStyle,omitempty"`
 	Branch        string `json:"branch,omitempty"`
-	Library       bool   `json:"library"`
-	Memory        bool   `json:"memory"`
-	Providers     bool   `json:"providers"`
-	Settings      bool   `json:"settings"`
-	Profiles      bool   `json:"profiles"`
-	Usage         bool   `json:"usage,omitempty"`
-	SignIns       bool   `json:"signIns,omitempty"`
+	// GitName and GitEmail are who GitHub sync commits as, none for
+	// CommitDefault (Config.GitName)
+	GitName  string `json:"gitName,omitempty"`
+	GitEmail string `json:"gitEmail,omitempty"`
+	// CommitDefault is who GitHub sync commits as when no one is named
+	CommitDefault CommitAs `json:"commitDefault"`
+	Library       bool     `json:"library"`
+	Memory        bool     `json:"memory"`
+	Providers     bool     `json:"providers"`
+	Settings      bool     `json:"settings"`
+	Profiles      bool     `json:"profiles"`
+	Usage         bool     `json:"usage,omitempty"`
+	SignIns       bool     `json:"signIns,omitempty"`
 	// SignInsExcept are the subscriptions whose sign-ins stay out
 	// (Config.SignInsExcept)
 	SignInsExcept []string `json:"signInsExcept,omitempty"`
+	// ProviderSettingsHere is whether the providers' settings stay on
+	// this computer (Config.ProviderSettingsHere)
+	ProviderSettingsHere bool `json:"providerSettingsHere,omitempty"`
 	// UsageError is why usage couldn't be shared the last time it was tried
 	UsageError string    `json:"usageError,omitempty"`
 	Last       time.Time `json:"last,omitzero"`
@@ -609,19 +647,28 @@ type OtherView struct {
 	Region      string `json:"region,omitempty"`
 	PathStyle   bool   `json:"pathStyle,omitempty"`
 	Branch      string `json:"branch,omitempty"`
+	GitName     string `json:"gitName,omitempty"`
+	GitEmail    string `json:"gitEmail,omitempty"`
+}
+
+// CommitAs is a commit's name and email.
+type CommitAs struct {
+	Name  string `json:"name"`
+	Email string `json:"email"`
 }
 
 // Status is sync's setup and how the last sync went.
 func Status() View {
 	c, ok := Load()
 	if !ok {
-		return View{Keys: true, Agents: true, Library: true, Memory: true, Providers: true, Settings: true, Profiles: true}
+		return View{Keys: true, Agents: true, Library: true, Memory: true, Providers: true, Settings: true, Profiles: true, CommitDefault: commitDefault}
 	}
 	st := loadState()
 	v := View{On: true, URL: c.URL, User: c.User, PasswordSet: c.Password != "", PassphraseSet: c.Passphrase != "",
 		Keys: c.Keys, Agents: c.Agents, Library: c.library(), Memory: c.memoryOn(), Error: st.Error, Notice: st.Notice,
 		Providers: c.syncs("providers"), Settings: c.syncs("settings"), Profiles: c.syncs("profiles"),
 		Kind: strings.ToLower(c.Kind()), Endpoint: c.Endpoint, Region: c.Region, PathStyle: c.PathStyle, Branch: c.Branch,
+		GitName: c.GitName, GitEmail: c.GitEmail, CommitDefault: commitDefault,
 		Auto: int(c.auto() / time.Minute), FollowServer: c.FollowServer}
 	if st.Key == stateKey(c) {
 		v.Last = st.Last
@@ -645,23 +692,25 @@ func Status() View {
 			}
 		}
 	}
-	v.Usage, v.SignIns, v.SignInsExcept = c.Usage, c.SignIns, c.SignInsExcept
+	v.Usage, v.SignIns, v.SignInsExcept, v.ProviderSettingsHere = c.Usage, c.SignIns, c.SignInsExcept, c.ProviderSettingsHere
 	if c.Agents {
 		v.Own = ownFields(st)
 	}
 	if o := c.Other; o != nil {
 		v.Other = &OtherView{Kind: strings.ToLower(o.config().Kind()), URL: o.URL, User: o.User, PasswordSet: o.Password != "",
-			Endpoint: o.Endpoint, Region: o.Region, PathStyle: o.PathStyle, Branch: o.Branch}
+			Endpoint: o.Endpoint, Region: o.Region, PathStyle: o.PathStyle, Branch: o.Branch, GitName: o.GitName, GitEmail: o.GitEmail}
 	}
 	for kind, s := range c.Servers {
 		if v.Servers == nil {
 			v.Servers = map[string]OtherView{}
 		}
 		v.Servers[kind] = OtherView{Kind: kind, URL: s.URL, User: s.User, PasswordSet: s.Password != "",
-			Endpoint: s.Endpoint, Region: s.Region, PathStyle: s.PathStyle, Branch: s.Branch}
+			Endpoint: s.Endpoint, Region: s.Region, PathStyle: s.PathStyle, Branch: s.Branch, GitName: s.GitName, GitEmail: s.GitEmail}
 	}
 	return v
 }
+
+var commitDefault = CommitAs{DefaultCommitName, DefaultCommitEmail}
 
 // Dismiss clears the notice, and with a restore's, its undo.
 func Dismiss() error {
@@ -807,7 +856,7 @@ func syncNow(ctx context.Context, force bool, expect string) error {
 	}
 	st := loadState()
 	if st.Key != stateKey(c) { // another folder or passphrase: start afresh
-		st = state{Key: stateKey(c), Brought: st.Brought, Replaced: st.Replaced, Own: st.Own, Follow: st.Follow, Here: st.Here}
+		st = state{Key: stateKey(c), Brought: st.Brought, Replaced: st.Replaced, Own: st.Own, Follow: st.Follow, Here: st.Here, Settings: st.Settings}
 	}
 	if expect != "" { // what the user saw previewed, or nothing
 		p, err := preview(ctx, c, st)
@@ -1025,7 +1074,7 @@ func syncedProviders(ps []provider.Provider) []provider.Provider {
 	ps = slices.Clone(ps)
 	for i := range ps {
 		ps[i].KeepLogin, ps[i].KeepLoginAs, ps[i].SwitchOnly, ps[i].RestartApp = false, "", false, false
-		ps[i].KeepSelf = false
+		ps[i].KeepSelf, ps[i].AutoSwitch = false, false
 	}
 	return ps
 }
@@ -1157,6 +1206,7 @@ func take(to *backup.Bundle, from backup.Bundle, part string) {
 			copy.LANKey, copy.LANKeyID = to.Settings.LANKey, to.Settings.LANKeyID
 			copy.GitHubToken = to.Settings.GitHubToken
 			copy.BarkKey = to.Settings.BarkKey
+			copy.TelegramToken, copy.TelegramChat, copy.DiscordWebhook = to.Settings.TelegramToken, to.Settings.TelegramChat, to.Settings.DiscordWebhook
 			copy.OTel.Headers = nil
 			if strings.TrimRight(strings.TrimSpace(copy.OTel.Endpoint), "/") == to.Settings.OTel.Endpoint {
 				copy.OTel.Headers = to.Settings.OTel.Headers
@@ -1229,8 +1279,9 @@ func changed(part string, keys bool) time.Time {
 }
 
 // bring puts the server's part in here: providers and profiles mirrored,
-// so what went elsewhere goes here too.
-func bring(b backup.Bundle, part string) error {
+// so what went elsewhere goes here too. The providers here keep their
+// settings when own has them (withSettings).
+func bring(b backup.Bundle, part string, own map[string]bool) error {
 	switch part {
 	case "providers":
 		for name, data := range b.Icons {
@@ -1241,7 +1292,11 @@ func bring(b backup.Bundle, part string) error {
 				}
 			}
 		}
-		if err := provider.Mirror(b.Providers, b.Groups); err != nil {
+		mirror := provider.Mirror
+		if own[settingsOwn] {
+			mirror = provider.MirrorKeepingSettings
+		}
+		if err := mirror(b.Providers, b.Groups); err != nil {
 			return err
 		}
 		if err := provider.MirrorOrder(b.Order); err != nil {
@@ -1410,7 +1465,9 @@ func syncOnce(ctx context.Context, c Config, st *state, pv *Plan) error {
 	// hashes leave out: none of them, once Settings gave them back.
 	// An agent whose picks stay here (hereOf) is own in every field, as
 	// the last sync had it in prev, as it is now in keep and afterW.
-	prev := withHere(maps.Clone(st.Own), st.Here)
+	// The providers' settings kept here (Config.ProviderSettingsHere) are
+	// own the same way, as the last sync had them in prev (st.Settings).
+	prev := withSettings(withHere(maps.Clone(st.Own), st.Here), st.Settings)
 	if c.Agents {
 		noticeOwn(st, local.Agents)
 	}
@@ -1421,8 +1478,8 @@ func syncOnce(ctx context.Context, c Config, st *state, pv *Plan) error {
 	}
 	st.Follow = false
 	kept := hereOf(c, local)
-	moved := !slices.Equal(kept, st.Here)
-	keep, afterW := withHere(own, kept), withHere(after, kept)
+	moved := !slices.Equal(kept, st.Here) || st.Settings != c.ProviderSettingsHere
+	keep, afterW := withSettings(withHere(own, kept), c.ProviderSettingsHere), withSettings(withHere(after, kept), c.ProviderSettingsHere)
 	L := hashesOwn(local, prev)
 	// parts left out at the last sync and synced now: joined again
 	var rejoin []string
@@ -1494,7 +1551,7 @@ func syncOnce(ctx context.Context, c Config, st *state, pv *Plan) error {
 		if err := push(c.only(local), "", blind{}); err != nil {
 			return err
 		}
-		st.Own, st.Here = after, kept
+		st.Own, st.Here, st.Settings = after, kept, c.ProviderSettingsHere
 		st.Local = hashesOwn(local, afterW)
 		st.SignIns = nil
 		if c.SignIns {
@@ -1632,9 +1689,7 @@ func syncOnce(ctx context.Context, c Config, st *state, pv *Plan) error {
 		switch {
 		case lc && !rc:
 			take(&merged, local, p)
-			if p == "agents" {
-				keepServersOwn(&merged, remote, keep)
-			}
+			keepServersOwn(&merged, remote, keep, p)
 		case rc && !lc && first && unset(remote, p) && !unset(local, p):
 			// Joining a file whose part holds nothing of its own (its
 			// first writer had no providers, no settings of its own, an
@@ -1656,9 +1711,7 @@ func syncOnce(ctx context.Context, c Config, st *state, pv *Plan) error {
 		case lc && rc: // both: the newer stays
 			if changed(p, c.Keys).After(remote.Created) {
 				take(&merged, local, p)
-				if p == "agents" {
-					keepServersOwn(&merged, remote, keep)
-				}
+				keepServersOwn(&merged, remote, keep, p)
 				there = append(there, p)
 			} else {
 				bringIn = append(bringIn, p)
@@ -1711,7 +1764,7 @@ func syncOnce(ctx context.Context, c Config, st *state, pv *Plan) error {
 			}
 			continue
 		}
-		if err := bring(remote, p); err != nil {
+		if err := bring(remote, p, afterW); err != nil {
 			return fmt.Errorf("bringing in the %s: %w", p, err)
 		}
 	}
@@ -1730,7 +1783,7 @@ func syncOnce(ctx context.Context, c Config, st *state, pv *Plan) error {
 			return fmt.Errorf("bringing in the agents: %w", err)
 		}
 	}
-	st.Own, st.Here, R = after, kept, Rafter
+	st.Own, st.Here, st.Settings, R = after, kept, c.ProviderSettingsHere, Rafter
 	// the plugins the other computers removed, removed here as Settings
 	// removes one; one that can't be (its agent is on magpie) is tried
 	// again at the next sync, and isn't sent up meanwhile

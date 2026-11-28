@@ -6,6 +6,7 @@
 package library
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
@@ -77,6 +78,11 @@ type Library struct {
 	// which hands each call on to the library's servers ticked for it, in
 	// place of their own entries (#2679, mcp_hub.go)
 	MCPHub bool `json:"mcpHub,omitempty"`
+	// RemoteAgents are the agents not on this computer that connected to
+	// the router at their own address from another one (remote_agents.go):
+	// a magpie in Docker has none of its own. This computer's own:
+	// Collect doesn't carry it
+	RemoteAgents []string `json:"remoteAgents,omitempty"`
 	// SkillRouter gives each agent that can take it magpie's one skill,
 	// magpie-skills, listing the library's skills ticked for it, in place
 	// of a link of each (skill_router.go). This computer's own: Collect
@@ -89,9 +95,11 @@ type Library struct {
 	// router was given a server, for one the user removed not to come
 	// back (bridge_mcp.go)
 	BridgesOffered []string `json:"bridgesOffered,omitempty"`
-	// ArtifactsOffered is set once Magpie Artifacts was given to the agents,
-	// for a user who removed it not to see it come back (artifacts.go)
-	ArtifactsOffered bool `json:"artifactsOffered,omitempty"`
+	// ArtifactsOffered is set when a Sync of 11-24 gave Magpie Artifacts
+	// to the agents unasked, and ArtifactsWithdrawn once a later one took
+	// it back (artifacts.go)
+	ArtifactsOffered   bool `json:"artifactsOffered,omitempty"`
+	ArtifactsWithdrawn bool `json:"artifactsWithdrawn,omitempty"`
 	// BridgesOn are the Remote magpies (provider ids) the user asked to
 	// give their router a server, in the editor's switch (bridge_mcp.go)
 	BridgesOn []string `json:"bridgesOn,omitempty"`
@@ -122,6 +130,9 @@ type Library struct {
 	// stored are the skills this sync made sure of in a WSL distro's
 	// store, by path (storeSkill), with what went wrong
 	stored map[string]error
+	// olds are the old copies of skills found in each folder this
+	// change looked in, by skill (skills_old.go)
+	olds map[string]map[string][]string
 }
 
 // Instructions are one shared text, and for each agent whether it gets it
@@ -160,6 +171,11 @@ type Applied struct {
 	// rules, OpenCode's tools keys). Neither holds one the user had.
 	ToolsOff  map[string][]string `json:"toolsOff,omitempty"`
 	ToolRules []string            `json:"toolRules,omitempty"`
+	// ArtifactOwn: the user took magpie's deny of Claude Code's own
+	// Artifact out of its settings.json while Magpie Artifacts was given
+	// to it. The tool is theirs, and no Sync writes the deny again until
+	// the server is no longer ticked for the agent (artifacts.go).
+	ArtifactOwn bool `json:"artifactOwn,omitempty"`
 	// Hooks are the entries magpie wrote into the agent's hooks, each
 	// exactly as written: one changed since is the user's (hooks.go)
 	Hooks []HookEntry `json:"hooks,omitempty"`
@@ -179,6 +195,10 @@ type Applied struct {
 	// entry (Codex's startup_timeout_sec): one there other than this is
 	// the user's
 	Startup map[string]float64 `json:"startup,omitempty"`
+	// Calls is, for each server, the tool timeout magpie wrote in its
+	// entry, in the entry's unit (callKeys): one there other than this is
+	// the user's
+	Calls map[string]float64 `json:"calls,omitempty"`
 	// Picked are the skills magpie picked in the agent's own list of
 	// those it uses (LiveAgent's skills-settings.json, liveagent.go): one
 	// the user unpicked since stays unpicked
@@ -186,6 +206,10 @@ type Applied struct {
 	// Router: magpie put the skill router's entry, magpie-skills, in the
 	// agent's skills folder
 	Router bool `json:"router,omitempty"`
+	// RouterUnnamed is how many of the skills the router lists its
+	// description had no room to name (routerDesc): the agent finds them
+	// only in its SKILL.md
+	RouterUnnamed int `json:"routerUnnamed,omitempty"`
 	// RouterRules are the rules magpie put in Claude Code's
 	// permissions.allow so it reads a listed skill without asking.
 	RouterRules []string `json:"routerRules,omitempty"`
@@ -200,8 +224,8 @@ type Applied struct {
 // it looked at the agent through (#4247).
 func (a *Applied) empty() bool {
 	return !a.Instructions && a.InstrHash == "" && len(a.MCP) == 0 && len(a.Skills) == 0 &&
-		len(a.ToolsOff) == 0 && len(a.ToolRules) == 0 && len(a.Hooks) == 0 && len(a.Env) == 0 &&
-		len(a.Subagents) == 0 && len(a.Commands) == 0 && len(a.Rules) == 0 && len(a.Startup) == 0 && len(a.Picked) == 0 && !a.Router && len(a.RouterRules) == 0 && len(a.RouterCommands) == 0
+		len(a.ToolsOff) == 0 && len(a.ToolRules) == 0 && !a.ArtifactOwn && len(a.Hooks) == 0 && len(a.Env) == 0 &&
+		len(a.Subagents) == 0 && len(a.Commands) == 0 && len(a.Rules) == 0 && len(a.Startup) == 0 && len(a.Calls) == 0 && len(a.Picked) == 0 && !a.Router && len(a.RouterRules) == 0 && len(a.RouterCommands) == 0
 }
 
 var mu lock // one change at a time, from the page or the CLI's process
@@ -387,14 +411,29 @@ func set(list []string, id string, on bool) []string {
 // changed into the agents. The processes of a server taken out are ended
 // after, with the lock let go (mcp_reap.go).
 func change(f func(l *Library) error) (*Result, error) {
-	res, err := changeLocked(f)
+	return changeAs(f, false)
+}
+
+// changeMCP is change for one to the MCP servers alone (their agents,
+// settings, tools), which writes only the agents' MCP files: the servers'
+// entries, the router's, the tool rules beside them, and the projects'.
+// A whole sync went through every agent's skills too, copies hashed and
+// all, and on Windows ticking Magpie Artifacts on ~30 agents said Saving…
+// for about a minute (zysicyj on X). Should f, or what change does after
+// it, have changed anything else, every agent is written as change does.
+func changeMCP(f func(l *Library) error) (*Result, error) {
+	return changeAs(f, true)
+}
+
+func changeAs(f func(l *Library) error, mcp bool) (*Result, error) {
+	res, err := changeLocked(f, mcp)
 	if res != nil && len(res.dropped) > 0 {
 		ending(res.dropped)
 	}
 	return res, err
 }
 
-func changeLocked(f func(l *Library) error) (*Result, error) {
+func changeLocked(f func(l *Library) error, mcp bool) (*Result, error) {
 	mu.Lock()
 	defer mu.Unlock()
 	l, err := load()
@@ -403,6 +442,10 @@ func changeLocked(f func(l *Library) error) (*Result, error) {
 	}
 	// what a subagent's file says first, for f to change that
 	l.followSubagentFiles()
+	var was []byte
+	if mcp {
+		was = l.beyondMCP()
+	}
 	if err := f(l); err != nil {
 		return nil, err
 	}
@@ -412,6 +455,36 @@ func changeLocked(f func(l *Library) error) (*Result, error) {
 	if err := l.save(); err != nil {
 		return nil, err
 	}
-	res := l.sync()
+	var res *Result
+	if mcp && was != nil && bytes.Equal(was, l.beyondMCP()) {
+		res = l.syncMCPOnly()
+	} else {
+		res = l.sync()
+	}
 	return res, l.save()
+}
+
+// beyondMCP is the library but for its MCP servers and what goes with
+// them, as saved: a change to the servers alone leaves it as it was. Nil
+// when it can't be told.
+func (l *Library) beyondMCP() []byte {
+	c := *l
+	c.MCP, c.Away, c.Projects, c.Applied, c.Icons = nil, nil, nil, nil, nil
+	c.MCPHub, c.BridgesOn, c.BridgesOffered, c.PluginsOffered = false, nil, nil, nil
+	c.ArtifactsOffered, c.ArtifactsWithdrawn = false, false
+	b, err := json.Marshal(&c)
+	if err != nil {
+		return nil
+	}
+	// a subagent's file names the servers it uses that the library has
+	// and that are on (renderSubagent): one removed, renamed or turned
+	// off changes the file, which the whole sync writes
+	for _, s := range l.Subagents {
+		for _, n := range s.MCP {
+			if x := l.server(n); x != nil && !x.Hidden {
+				b = append(b, "\x00"+s.Name+"\x00"+n...)
+			}
+		}
+	}
+	return b
 }

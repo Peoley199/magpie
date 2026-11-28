@@ -105,6 +105,14 @@ const get = async (path) => {
   return { body: await res.json(), cc: res.headers.get("Cache-Control") };
 };
 
+test("shares: a path no handler knows is a 404, not an exception", async () => {
+  for (const p of ["/api/shares/aaaaaaaaaaaaaaaaaaaaaaaaaa/rt/live?t=x", "/api/shares/aaaaaaaaaaaaaaaa/nope", "/api/shares/x/session"]) {
+    const res = await worker.fetch(new Request("https://usemagpie.ai" + p, { method: "POST" }), { SHARES_DB: {}, SHARES: {}, LIVE: {}, LIVE_KEY: "k" }, ctx);
+    assert.ok(res instanceof Response, p);
+    assert.equal(res.status, 404, p);
+  }
+});
+
 test("latest: the English alone without lang, the Chinese with zh", async () => {
   for (const q of ["", "?lang=en", "?lang=fr"]) {
     const { body, cc } = await get("/api/latest" + q);
@@ -639,7 +647,7 @@ test("sponsors: the home page and the READMEs link every sponsor through /go", a
       }
     }
   const home = readFileSync(pages.home[0], "utf8");
-  for (const s of SPONSORS.filter((s) => s.home)) assert.ok(home.includes(`href="/go/${s.id}/home"`), s.id);
+  for (const s of SPONSORS.filter((s) => s.home)) assert.equal(home.includes(`href="/go/${s.id}/home"`), !s.homeEnded, s.id);
 });
 
 // HTMLRewriter is Cloudflare's; this stands in for the two uses here: a
@@ -689,7 +697,13 @@ test("contributors: each language's page gets its own table, and keeps its line 
     const get = async (path) => (await worker.fetch(new Request(`https://usemagpie.ai${path}`, { headers: { Cookie: "lang=en" } }), env, ctx)).text();
     for (const [path, lang, head] of [["/docs/contributors", "en", "What came of it"], ["/docs/zh/contributors", "zh", "带来的改动"], ["/docs/ja/contributors.html", "ja", "そこから生まれた"]]) {
       const html = await get(path);
-      assert.match(html, /<div id="wall"><div class="table-wrap"><table class="cw">/, path);
+      assert.match(html, /<div id="wall"><div class="cw-find" hidden [^>]*><input id="cw-q" [^>]*><span class="cw-n" aria-live="polite"><\/span><\/div><div class="table-wrap cw-wrap" data-no-record><div class="cw-part" style="--h:\d+px"><table class="cw"><colgroup><col class="cw-c1"><col><\/colgroup><thead>/, path);
+      // the table and the replay stay out of session recordings
+      assert.ok(html.includes('<div id="replay" class="replay" data-no-record hidden>'), path);
+      assert.ok(html.includes('blockSelector:"[data-no-record]"'), path);
+      // the finder's script, and the row a link lands on
+      assert.ok(html.includes('<script src="/wall.js"></script>'), `${path} loads the finder`);
+      assert.ok(html.includes('<tr id="packinggoodsllc_07668">'), path);
       assert.ok(html.includes(head), `${path} has the ${lang} table`);
       assert.ok(html.includes("packinggoodsllc_07668") && html.includes("v0.1.2581"), path);
       assert.match(html, /posthog\.init\(/, `${path} keeps the analytics`);

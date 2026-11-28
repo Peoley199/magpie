@@ -64,7 +64,7 @@ code, pre, kbd, .mono { font-family: ui-monospace, "SF Mono", "JetBrains Mono", 
 nav { position: sticky; top: 0; z-index: 10; backdrop-filter: saturate(1.4) blur(14px); -webkit-backdrop-filter: saturate(1.4) blur(14px); background: color-mix(in srgb, var(--bg) 78%, transparent); border-bottom: 1px solid var(--line); }
 nav .wrap { display: flex; align-items: center; gap: 14px; height: 60px; }
 .brand { flex: none; white-space: nowrap; display: flex; align-items: center; gap: 9px; font-weight: 650; font-size: 17px; letter-spacing: -.01em; text-decoration: none; }
-.brand img { width: 24px; height: 24px; }
+.brand img, .brand .mb { width: 24px; height: 24px; }
 .brand small { font-weight: 500; color: var(--ink3); font-size: 15px; padding-left: 10px; margin-left: 2px; border-left: 1px solid var(--line); }
 /* one line only: a link that doesn't fit wraps onto a second line the bar clips, never into a column of characters */
 nav .links { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 40px 24px; min-width: 0; height: 22px; line-height: 22px; overflow: hidden; margin-left: auto; margin-right: 10px; font-size: 14px; color: var(--ink2); }
@@ -159,14 +159,79 @@ pre .s { color: var(--ink2); }
 /* the contributors page's list (credits.mjs renderWall) */
 /* fixed columns: one long word in a release's line can't widen the table past a phone */
 .cw { table-layout: fixed; }
-.cw th:first-child { width: 11em; }
-@media (max-width: 600px) { .cw th:first-child { width: 8em; } }
+.cw .cw-c1 { width: 13em; }
+@media (max-width: 600px) { .cw .cw-c1 { width: 9.5em; } }
+/* credits.mjs renderWall: parts drawn only near the screen; the finder
+   draws one it cuts down (.cw-drawn, wall.js), a part with no row found goes */
+.cw-part { content-visibility: auto; contain-intrinsic-size: auto var(--h, 4000px); }
+@media (max-width: 600px) { .cw-part { contain-intrinsic-size: auto calc(var(--h, 4000px) * 1.9); } }
+.cw-part.cw-drawn { content-visibility: visible; }
+.cw-part[hidden] { display: none; }
+.cw-part .cw tr:last-child td { border-bottom: 1px solid var(--line); }
+.cw-part:last-child .cw tr:last-child td, .cw-part .cw tr.cw-last td { border-bottom: 0; }
 .cw td, .cw td:first-child { white-space: normal; overflow-wrap: anywhere; }
 .cw ul { margin: 0; padding: 0; list-style: none; }
 .cw li { margin: 0 0 4px; }
 .cw details summary { cursor: pointer; color: var(--ink2); font-size: 13px; }
 .cw details ul { margin-top: 4px; }
 .cw-via { color: var(--ink3); font-size: 12px; font-weight: 400; }
+/* its finder (public/wall.js): no motion, the rows just go */
+.cw-find { display: flex; align-items: center; gap: 12px; margin: 0 0 12px; }
+.cw-find[hidden], .table-wrap[hidden] { display: none; }
+.cw-find input { flex: 1; max-width: 320px; -webkit-appearance: none; appearance: none; }
+.cw-find input::-webkit-search-cancel-button { display: none; }
+@media (max-width: 600px) { .cw-find input { font-size: 16px; max-width: none; } }
+.cw-n { color: var(--ink3); font-size: 13px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* the row a link lands on */
+.cw tr:target > td { background: var(--bg2); }
+.cw-who { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
+.cw-who > div { min-width: 0; }
+.cw-av { flex: none; width: 24px; height: 24px; border-radius: 50%; background: var(--code); box-shadow: inset 0 0 0 1px var(--line); display: inline-grid; place-items: center; font-size: 11px; font-weight: 600; color: var(--ink3); object-fit: cover; margin-top: -1px; }
+img.cw-av { box-shadow: 0 0 0 1px var(--line); }
+.cw tr { scroll-margin-top: 90px; }
+
+/* the replay above it (contributors-replay.js) */
+.replay { border: 1px solid var(--line); border-radius: 12px; background: var(--card); margin: 0 0 28px; overflow: hidden; }
+/* strict: what changes in it each frame (the date, the count, the names
+   arriving) is laid out on its own, never with the page's long table */
+.rp-stage { position: relative; height: 400px; touch-action: pan-y; contain: strict; }
+.rp-stage.hit { cursor: pointer; }
+.rp-stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.rp-bird { position: absolute; left: 0; top: 0; width: 40px; height: 40px; transform-origin: 0 0; }
+.rp-bird > * { display: block; width: 40px; height: 40px; }
+.rp-hud { position: absolute; left: 16px; right: 16px; top: 12px; display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; pointer-events: none; font-size: 13px; color: var(--ink2); font-variant-numeric: tabular-nums; }
+.rp-hud, .rp-feed { text-shadow: 0 0 2px var(--card), 0 0 6px var(--card), 0 0 10px var(--card); }
+.rp-date { color: var(--ink); font-weight: 600; font-size: 14px; }
+.rp-ver { color: var(--ink3); font-size: 12px; margin-top: 1px; }
+.rp-count { text-align: right; }
+.rp-count b { color: var(--ink); font-weight: 600; }
+.rp-feed { position: absolute; left: 16px; bottom: 10px; margin: 0; padding: 0; list-style: none; pointer-events: none; font-size: 12.5px; color: var(--ink2); max-width: calc(100% - 32px); }
+.rp-feed li { margin: 0; white-space: nowrap; opacity: 0; transform: translateY(4px); transition: opacity .2s cubic-bezier(.23, 1, .32, 1), transform .2s cubic-bezier(.23, 1, .32, 1); }
+.rp-feed li.shown { opacity: 1; transform: none; }
+.rp-feed li.going { opacity: 0; transition-duration: .15s; }
+.rp-tip { position: absolute; left: 0; top: 0; display: flex; align-items: center; gap: 9px; max-width: 260px; padding: 8px 11px 8px 8px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); font-size: 12.5px; color: var(--ink2); pointer-events: none; opacity: 0; transform: scale(.95); transition: opacity .15s cubic-bezier(.23, 1, .32, 1), transform .15s cubic-bezier(.23, 1, .32, 1); }
+.rp-tip.on { opacity: 1; transform: none; }
+.rp-tip .cw-av { width: 32px; height: 32px; font-size: 13px; margin: 0; }
+.rp-tip > div { min-width: 0; display: grid; }
+.rp-tip b { color: var(--ink); font-weight: 600; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rp-bar { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-top: 1px solid var(--line); }
+.rp-play .i-pause, .rp-play.on .i-play, .rp-sound .i-on, .rp-sound.on .i-off { display: none; }
+.rp-play.on .i-pause, .rp-sound.on .i-on { display: block; }
+.rp-sound { color: var(--ink3); transition: color .15s ease; }
+.rp-sound.on { color: var(--ink); }
+.rp-play:active, .rp-sound:active { transform: scale(.97); }
+.rp-hist { position: relative; flex: 1; height: 30px; cursor: ew-resize; touch-action: none; border-radius: 4px; }
+.rp-hist:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
+.rp-hist canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+@media (max-width: 600px) {
+  .rp-stage { height: 300px; }
+  .rp-hud { left: 12px; right: 12px; font-size: 12px; }
+  .rp-feed { left: 12px; }
+  .rp-feed li:not(:last-child) { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rp-feed li, .rp-tip { transform: none !important; }
+}
 table { width: 100%; border-collapse: collapse; font-size: 14.5px; }
 th, td { text-align: left; padding: 11px 16px; border-bottom: 1px solid var(--line); vertical-align: top; }
 tr:last-child td { border-bottom: 0; }

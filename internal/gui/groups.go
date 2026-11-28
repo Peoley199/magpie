@@ -13,6 +13,8 @@ import (
 	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/agent"
 	"github.com/yetone/magpie/internal/gateway"
+	"github.com/yetone/magpie/internal/groupshare"
+	"github.com/yetone/magpie/internal/middleware"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/settings"
 )
@@ -33,6 +35,9 @@ type groupsJSON struct {
 	Drawers []modelRef `json:"drawers"`
 	// Found: magpie finds groups on its own (provider.AutoGroupsOn)
 	Found bool `json:"found"`
+	// OfOne: a model one provider alone serves is a found group too
+	// (provider.AutoGroupsOfOneOn), set under the page's Advanced
+	OfOne bool `json:"ofOne"`
 	// Skip: the providers kept out of found groups, by id
 	// (provider.AutoGroupSkip); Skippable: those that can be, each a
 	// provider ready to serve, switched off or not, and one in Skip that
@@ -56,6 +61,13 @@ type groupsJSON struct {
 	// Imported: import's answer, the group added and what of the text
 	// this magpie has none of (provider.ImportGroup)
 	Imported *provider.Imported `json:"imported,omitempty"`
+	// Published: publish's answer, the group's link on usemagpie.ai
+	// (groupshare.Publish)
+	Published *groupshare.Mine `json:"published,omitempty"`
+	// Links: the groups the user shared on usemagpie.ai, by id here; From:
+	// those imported from one there, the shared group's id and version
+	Links map[string]groupshare.Mine `json:"links"`
+	From  map[string]groupshare.From `json:"from"`
 	// Accounts: by provider id, the accounts and keys a group may be held
 	// to (Group.Accounts), as a gateway key's list has them (#905): each
 	// provider with more than one, or one a group names already
@@ -68,6 +80,10 @@ type groupsJSON struct {
 	// Defaults: what every group follows when it sets no value of its own
 	// (settings.GroupSink, GroupFirstToken, GroupPatience)
 	Defaults groupDefaultsJSON `json:"defaults"`
+	// JSRoutings: the routings JS gateway plugins serve now, as in the
+	// state, read again each time the page is shown: one installed since
+	// the state was read is offered at once (guhailin3 on X)
+	JSRoutings []middleware.Routing `json:"jsRoutings"`
 }
 
 type groupKeyJSON struct {
@@ -103,6 +119,7 @@ type groupDefaultsJSON struct {
 type skippableJSON struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
+	Icon string `json:"icon,omitempty"` // the provider's logo, for its row and chip
 }
 
 type groupJSON struct {
@@ -176,6 +193,12 @@ type memberJSON struct {
 	// OwnFast: that fast mode is asked of a provider the user added by its
 	// address, which may or may not serve it (provider.OwnFast, #1615)
 	OwnFast bool `json:"ownFast,omitempty"`
+	// ModelTest is why its model can't be sent a test request of its own,
+	// as its provider says it (provider.ModelTest): "decide" for a decision
+	// API whose models are tested as one endpoint, "own-api" for a sign-in
+	// reached through its agent's own API. "" when it can be tested, which
+	// is what the row's Test reads.
+	ModelTest string `json:"modelTest,omitempty"`
 	// Efforts: the reasoning levels this member is offered. A model's own,
 	// or — a member that is itself a group — the levels it passes on to
 	// agents, which are the ones every model in it has (provider.groupEntries).
@@ -203,7 +226,10 @@ type modelRef struct {
 	Provider string `json:"provider"`
 	PName    string `json:"providerName"`
 	Icon     string `json:"icon,omitempty"`
-	Context  int    `json:"context,omitempty"` // the tokens it takes, when known
+	// Icons: a routing group's providers' icons, stacked in the model
+	// picker as the Agents page stacks them
+	Icons   []string `json:"icons,omitempty"`
+	Context int      `json:"context,omitempty"` // the tokens it takes, when known
 	// Efforts: the model's reasoning levels, when known — those a group's
 	// member of it may be fixed at
 	Efforts []string `json:"efforts,omitempty"`
@@ -216,6 +242,10 @@ type modelRef struct {
 	// OwnFast: asked of a provider the user added by its address, which may
 	// or may not serve it (provider.OwnFast, #1615)
 	OwnFast bool `json:"ownFast,omitempty"`
+	// ModelTest is why it can't be sent a test request of its own, as its
+	// provider says it (provider.ModelTest), so a member added to a group
+	// not saved yet is tested as one of a saved group is. "" when it can
+	ModelTest string `json:"modelTest,omitempty"`
 	// Images: agents are told it takes images (provider.Entry.Images); a
 	// group's editor says of each member what it says of it (#756).
 	// ImagesUnknown: nothing was read of it either way (imagesUnknown),
@@ -354,14 +384,40 @@ func groupAccounts(gs []provider.Group) map[string][]keyModelJSON {
 
 func groupsState() groupsJSON {
 	_, offset := time.Now().Zone()
-	out := groupsJSON{Groups: []groupJSON{}, Models: []modelRef{}, Pools: []poolJSON{}, Deciders: []modelRef{}, Drawers: []modelRef{}, Found: provider.AutoGroupsOn(), Templates: provider.Templates(),
+	out := groupsJSON{Groups: []groupJSON{}, Models: []modelRef{}, Pools: []poolJSON{}, Deciders: []modelRef{}, Drawers: []modelRef{}, Found: provider.AutoGroupsOn(), OfOne: provider.AutoGroupsOfOneOn(), Templates: provider.Templates(),
 		Clock: clockJSON{Zone: provider.LocalZone(), Offset: offset}}
+	out.JSRoutings = middleware.Routings()
+	out.Links, out.From = groupshare.Shared(), groupshare.Sources()
 	def := settings.Load()
 	out.Defaults = groupDefaultsJSON{Sink: def.GroupSink, FirstToken: def.GroupFirstToken, Patience: def.GroupPatience}
 	for i := range out.Templates {
 		if out.Templates[i].Group.Members == nil {
 			out.Templates[i].Group.Members = []string{} // one that can't be made has none
 		}
+	}
+	// ModelTest read once for each provider: the page says why a member's
+	// model can't be tested on its own, on every one of its rows, and tests
+	// a model of a group not saved yet from the models list too (#4540)
+	tests := map[string]string{}
+	testWhy := func(p provider.Provider) string {
+		if why, ok := tests[p.ID]; ok {
+			return why
+		}
+		why := p.ModelTest()
+		tests[p.ID] = why
+		return why
+	}
+	// a decision model is asked a System One question where its API takes
+	// one (AsksDecideModels), as the Providers page's chip tests it, even
+	// on a provider whose other models are chats
+	testWhyOf := func(p provider.Provider, model string) string {
+		if p.DecidesModel(model) {
+			if p.AsksDecideModels() {
+				return ""
+			}
+			return "decide"
+		}
+		return testWhy(p)
 	}
 	// the decision models a group's pickers offer: a provider's picks, and
 	// any a group names already, whatever the picks, so its card still
@@ -376,7 +432,7 @@ func groupsState() groupsJSON {
 		}
 	}
 	for _, e := range provider.OfferedDeciders(func(id string) bool { return named[id] }) {
-		out.Deciders = append(out.Deciders, modelRef{ID: e.ID, Name: e.Name, Provider: e.Provider.ID, PName: e.Provider.Name, Icon: e.Provider.Icon, Sub: e.Provider.Account != nil})
+		out.Deciders = append(out.Deciders, modelRef{ID: e.ID, Name: e.Name, Provider: e.Provider.ID, PName: e.Provider.Name, Icon: e.Provider.Icon, Sub: e.Provider.Account != nil, ModelTest: testWhyOf(*e.Provider, e.Model)})
 	}
 	out.Accounts = groupAccounts(all)
 	out.GatewayKeys = groupKeys()
@@ -389,6 +445,7 @@ func groupsState() groupsJSON {
 			chat[e.ID] = true
 			ref := servedRef(e, set)
 			ref.UltraOK = ref.CanFast && provider.UltraOn(*e.Provider, e.Model, ultra())
+			ref.ModelTest = testWhyOf(*e.Provider, e.Model)
 			out.Models = append(out.Models, ref)
 		}
 	}
@@ -407,7 +464,7 @@ func groupsState() groupsJSON {
 			if chat[ref] || p.DrawerHidden(m.ID) && !named[ref] {
 				continue
 			}
-			out.Drawers = append(out.Drawers, modelRef{ID: ref, Name: cmp.Or(m.Name, m.ID), Provider: p.ID, PName: p.Name, Icon: p.Icon, VendorPicks: gateway.VendorPicksDrawer(p)})
+			out.Drawers = append(out.Drawers, modelRef{ID: ref, Name: cmp.Or(m.Name, m.ID), Provider: p.ID, PName: p.Name, Icon: p.Icon, VendorPicks: gateway.VendorPicksDrawer(p), ModelTest: testWhy(p)})
 		}
 	}
 	// every provider's models read once for the groups, not once a group
@@ -488,6 +545,7 @@ func groupsState() groupsJSON {
 				m.Ultra = m.Fast && m.UltraOK && g.IsUltra(id)
 				m.Free = p.FreeModel(model)
 				m.Billing = p.BillingKind()
+				m.ModelTest = testWhyOf(p, model)
 				for _, e := range served {
 					if e.Group == "" && e.Provider.ID == p.ID && e.Model == model {
 						m.Context, m.Images, m.ImagesUnknown = e.Context, seesImages(e), imagesUnknown(e)
@@ -502,10 +560,12 @@ func groupsState() groupsJSON {
 				_, who := onOf(p)
 				_, model, _ := strings.Cut(of, "/")
 				m.Ready, m.Provider, m.Name, m.Icon, m.Model, m.On = true, p.ID, p.Name, p.Icon, model, max(len(who), 1)
+				m.ModelTest = testWhy(p)
 				gj.Ready = true
 			} else if pid, model, ok := strings.Cut(of, "/"); ok {
 				if p, err := provider.Find(pid); err == nil && !p.On() {
 					m.ProviderOff, m.Provider, m.Name, m.Icon, m.Model = true, p.ID, p.Name, p.Icon, model
+					m.ModelTest = testWhyOf(*p, model)
 				}
 			}
 			gj.Info = append(gj.Info, m)
@@ -525,7 +585,7 @@ func groupsState() groupsJSON {
 	out.Skippable = []skippableJSON{}
 	for _, p := range provider.All() {
 		if p.Ready() || slices.Contains(out.Skip, p.ID) {
-			out.Skippable = append(out.Skippable, skippableJSON{ID: p.ID, Name: p.Name})
+			out.Skippable = append(out.Skippable, skippableJSON{ID: p.ID, Name: p.Name, Icon: p.Icon})
 		}
 	}
 	for _, id := range out.Skip {
@@ -563,7 +623,7 @@ func groupRoutes(mux *http.ServeMux) {
 		var body struct {
 			provider.Group
 			From string `json:"from"` // the id the group had: another is a rename
-			On   bool   `json:"on"`   // found: magpie finds groups on its own
+			On   bool   `json:"on"`   // found: magpie finds groups on its own; ofone: of one provider too
 			// skip: the providers kept out of found groups
 			// (provider.SetAutoGroupSkip)
 			Skip []string `json:"skip"`
@@ -580,22 +640,30 @@ func groupRoutes(mux *http.ServeMux) {
 			// Replace: the text's id, when it is a group of the user's,
 			// replaces that group (provider.ImportGroupOver)
 			Replace bool `json:"replace"`
+			// sharing on usemagpie.ai (groups_share.go)
+			groupShareBody
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			fail(rw, err)
 			return
 		}
 		in := body.Group
+		if groupShareAction(rw, r, r.PathValue("action"), in.ID, body.Text, body.Replace, body.On, body.groupShareBody) {
+			return
+		}
 		var err error
 		var moved []agent.Move
 		var shared string
-		var imported *provider.Imported
 		switch r.PathValue("action") {
 		case "found":
 			// off, an agent set to a found group is moved to its model
 			// from one provider; a request still naming one goes there too
 			// (provider.AutoStandIn)
 			moved, err = agent.Reseat(func() error { return provider.SetAutoGroups(body.On) })
+		case "ofone":
+			// off, an agent set to a group of one is moved to its model,
+			// as turning found groups off does
+			moved, err = agent.Reseat(func() error { return provider.SetAutoGroupsOfOne(body.On) })
 		case "skip":
 			// an agent set to a found group skipping took away is moved to
 			// its model from one provider, as turning found groups off does
@@ -631,15 +699,6 @@ func groupRoutes(mux *http.ServeMux) {
 		case "share":
 			// the group as text for another magpie: no key goes with it
 			shared, err = provider.ShareGroup(in.ID)
-		case "import":
-			var res provider.Imported
-			imp := provider.ImportGroup
-			if body.Replace {
-				imp = provider.ImportGroupOver
-			}
-			if res, err = imp(body.Text); err == nil {
-				imported = &res
-			}
 		case "template":
 			_, err = provider.AddTemplate(body.Kind, in.Name)
 		case "switch":
@@ -664,7 +723,7 @@ func groupRoutes(mux *http.ServeMux) {
 			return
 		}
 		st := groupsState()
-		st.Moved, st.Shared, st.Imported = moved, shared, imported
+		st.Moved, st.Shared = moved, shared
 		writeJSON(rw, st)
 	})
 }

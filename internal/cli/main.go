@@ -105,7 +105,7 @@ const usage = `magpie — one place to pick every agent's model
                                   or only the models ticked for it, a new one off until it is ticked
   magpie search [add <api> <key>|rm <api>]   Tavily, Brave, Exa, Firecrawl, You.com, DeepSeek, Doubao Search (Volcengine), Yuanbao Search (Tencent Cloud), TinyFish or SearXNG for web search when no provider can search
   magpie groups                   routing groups: several models agents pick as one, group/<id>
-  magpie group add <name> models=<m1>,<m2> [routing=smart|order|rotate|usage|pace|weight|free|fast|cheap|drain|expiring|fit] [stays=auto|session|turn|off]
+  magpie group add <name> models=<m1>,<m2> [routing=smart|order|rotate|usage|pace|weight|free|fast|cheap|drain|pace-drain|expiring|fit] [stays=auto|session|turn|off]
   magpie group <id> | set <id> k=v… | rm <id>   show, change or remove one (magpie group help for more)
   magpie accounts [agent] [--json]  every subscription magpie knows, with each one's allowance used and when it resets
   magpie accounts add <agent>     sign in to one more Claude, ChatGPT or Google (Gemini CLI, Antigravity) subscription
@@ -123,6 +123,8 @@ const usage = `magpie — one place to pick every agent's model
   magpie accounts alias <agent> <email> [<name>|--clear]   a name of your own for an account, shown on its card, in the menu bar and in magpie quota
   magpie accounts switch-only codex [on|off]   only switch Codex's own sign-in to an account with room; its requests go straight to OpenAI, never through magpie
   magpie accounts switch-only claude [on|off]  only switch Claude Code's own sign-in to an account with room; magpie serves no requests on the Claude accounts
+  magpie accounts switch-only agy-cli [on|off] picking an Antigravity CLI account signs agy and the Antigravity app in to it; magpie serves no requests on them
+  magpie accounts auto-switch agy-cli [on|off] with switch-only on, sign agy in to the next account with room when the one it is on runs low (off by default)
   magpie claude-code [install [--yes]|remove]   the Claude Code a Claude subscription runs; install downloads Anthropic's own build, checked against its manifest, for a server or container without one
   magpie plugin [add <package>|rm|update|on|off|login <provider>|logout <provider>]
                                   OpenCode provider plugins and pi packages: subscriptions signed in to, and served, through a plugin
@@ -146,6 +148,7 @@ const usage = `magpie — one place to pick every agent's model
                                   version and listen address, also in <config folder>/gateway.json
   magpie mtls [on|off|issue <device>|list|revoke <device>]
                                   require a client certificate magpie issued from other computers (mTLS)
+  magpie lan [on|off]             share the gateway with other computers on this network, or keep it on this computer (127.0.0.1)
   magpie https [on|off|import <files>|remove|ca]
                                   other computers call magpie at https://, with your certificate or one magpie's own CA signs
   magpie heap [<file>]            a Go heap profile of the running magpie, with its memory numbers, for a report of it using too much memory
@@ -154,7 +157,7 @@ const usage = `magpie — one place to pick every agent's model
   magpie log [--path] [-n N] [-f]  where magpie's logs are, to send with a report: the app's (app.log), the service's; -n prints the app log's last N lines, -f follows it
   magpie gateway-key list|add <name> [--read-only]|rotate <id> [--key -]|remove <id>   manage the keys clients use to call a shared gateway
   magpie gateway-key limit <id> [list|off|reset [n]|remove <n>|[add] day|week|month|<N>d|<N>h --tokens N --cost USD --cache-reads --model openai/*]   a key's own limits, and what it used; --model counts only those models
-  magpie gateway-key models <id> [all|<provider>/<model>|<provider>/* ...]   the models a key may use, every one unless it names some
+  magpie gateway-key models <id> [all|none|<provider>/<model>|<provider>/* ...]   the models a key may use, every one unless it names some; none: MCP servers only
   magpie gateway-key accounts <id> [all|<provider>/<account>|<provider>/!<account>|@<group>|!@<group> ...]   the accounts a key may use, or keeps out
   magpie gateway-key groups [add <name> <account>...|set <group> <account>...|rename <group> <name>|remove <group>]   named account groups a key's accounts can name
   magpie gateway-key quotas <id> [on|off]   whether a key held to a budget, models or accounts is told the quotas of what it may use
@@ -182,8 +185,9 @@ const usage = `magpie — one place to pick every agent's model
   magpie sessions read [on|off all|<agent>…]   which agents' session history magpie may read (none until allowed)
   magpie sessions search <words…> [--agent <a>] [--days N|today|all] [--limit N] [--json]
                                   every agent's sessions that said those words, newest first, with where
-  magpie sessions show <agent:id> [--find <words>] [--from N] [--max-chars N] [--json]
-                                  one session's conversation as text, from where the words were said
+  magpie sessions show <agent:id> [--find <words>] [--from N] [--max-chars N] [--full] [--json]
+                                  one session's conversation as text, from where the words were said;
+                                  --full gives each message whole (cut at 8000 characters otherwise)
   magpie quota [<provider>] [--json]  what is left of every subscription, plan and key balance
   magpie quota wait <provider|account> [--timeout <d>] [--quiet]
                                   block until that subscription (any of its accounts) or account has allowance again
@@ -428,6 +432,11 @@ func run(args []string) error {
 		// else is read or moved
 		return mtlsCmd(args[1:])
 	}
+	if len(args) > 0 && args[0] == "lan" {
+		// Share on local network: the setting, which the serving gateway
+		// follows, nothing else
+		return lanCmd(args[1:])
+	}
 	if len(args) > 0 && args[0] == "https" {
 		// HTTPS for other computers: the setting, the certificate and
 		// magpie's CA, nothing else
@@ -543,6 +552,9 @@ func run(args []string) error {
 	// a Codex that reaches magpie for account failover alone is handed
 	// only its own models (#1385)
 	gateway.CodexOwnOnly = agent.CodexOwnOnly
+	// a Claude Code or Claude Desktop whose user turned its tool search
+	// off is given the router's tools on demand (#7349)
+	gateway.HubSearchOff = agent.HubSearchOff
 	// what magpie writes into an agent's TOML, YAML or dotenv config says
 	// so in a comment, for whoever reads it once magpie is gone
 	agent.MarkWritten()

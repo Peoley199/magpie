@@ -125,15 +125,59 @@ type memPrev struct {
 }
 
 // memOn says magpie's provider is the one Mem's AI uses. One named
-// magpie at another machine's address that magpie never set up (set: what
-// Mem had is stashed) is a magpie on a server the user added themselves
-// (Alex on Discord: the cloud magpie, in Mem's own magpie provider), never
-// this magpie's, as in Alma (almaMagpie). One magpie set up and the user
-// then pointed at a proxy in front of this gateway is still magpie's
-// (#1985), Check asking the address.
+// magpie at another machine's address is this magpie's when the address
+// answers as this magpie (magpieAt), as a proxy in front of this gateway
+// does (#1985), and never when it answers as another: a magpie on a
+// server the user added or imported over magpie's own (Alex on Discord,
+// 11-25 and 11-27: the cloud magpie, whose deepseek/pro this magpie
+// serves too, still read as connected here while what magpie stashed was
+// kept), as in Alma (almaMagpie). Until the address has answered it goes
+// by what magpie set up (set: what Mem had is stashed) and the model, so
+// a proxy isn't told replaced, and Reconnect offered over it, before it
+// is asked.
 func memOn(s memState, set bool) (memProvider, bool) {
 	p, ok := s.Providers[magpieID]
-	return p, ok && s.Enabled && s.Active == magpieID && (set || !onAnotherMachine(memBase(p)))
+	if !ok || !s.Enabled || s.Active != magpieID {
+		return p, false
+	}
+	if !onAnotherMachine(memBase(p)) {
+		return p, true
+	}
+	base, ok := proxyBase(memBase(p), gatewayV1())
+	if !ok {
+		return p, false
+	}
+	if yes, known := magpieAt(base); known {
+		return p, yes
+	}
+	return p, set && isMagpie(p.Model)
+}
+
+// memAsked waits for magpie's answer at the address of Mem's provider
+// named magpie, on another machine, before a write goes by memOn
+// (magpieAsked).
+func memAsked(s memState) {
+	if p, ok := s.Providers[magpieID]; ok && onAnotherMachine(memBase(p)) {
+		if base, ok := proxyBase(memBase(p), gatewayV1()); ok {
+			magpieAsked(base)
+		}
+	}
+}
+
+// memElsewhere says p, Mem's provider named magpie, sends Mem's requests
+// to another machine than magpie wrote: the user pointed it there since
+// (a magpie on a server imported over magpie's, or a proxy of theirs that
+// doesn't answer as this magpie), and it is theirs, never removed or
+// written over on the way out.
+func memElsewhere(p memProvider) bool {
+	b := memBase(p)
+	if !onAnotherMachine(b) || sameHost(b, gatewayV1()) {
+		return false
+	}
+	// a proxy in front of this gateway is magpie's still
+	base, ok := proxyBase(b, gatewayV1())
+	yes, known := magpieAt(base)
+	return !ok || !(yes && known)
 }
 
 // memBase is where p sends Mem's requests.
@@ -148,12 +192,20 @@ func memBase(p memProvider) string {
 // model, or for one named magpie that isn't this magpie's (memOn), a
 // magpie on a server, host/model, which is never read as a model of this
 // magpie's (Alex on Discord: the cloud magpie's deepseek/pro showed Mem
-// as connected here).
+// as connected here). So is one of another name on another machine
+// whose model reads as one of this magpie's (an OpenAI-compatible
+// provider the user added at the server's magpie): it is the server's,
+// and Mem isn't connected here, nor taken off it by Disconnect.
 func memOwnValue(id string, p memProvider) string {
-	if id == magpieID && p.Model != "" {
-		if u, err := url.Parse(memBase(p)); err == nil && u.Host != "" {
-			return u.Host + "/" + p.Model
-		}
+	if p.Model == "" {
+		return ""
+	}
+	b := memBase(p)
+	if id != magpieID && !(onAnotherMachine(b) && !sameHost(b, gatewayV1()) && isMagpie(p.Model)) {
+		return p.Model
+	}
+	if u, err := url.Parse(b); err == nil && u.Host != "" {
+		return u.Host + "/" + p.Model
 	}
 	return p.Model
 }
@@ -300,6 +352,33 @@ func nowledgeMem(home string) *Agent {
 			body["api_base"] = gatewayV1()
 			return c.post("/remote-llm/config", body)
 		},
+		// magpie's provider pointed at another machine since magpie set
+		// it up, there answering as another magpie (Alex on Discord: the
+		// magpie on their server imported over it), is the user's: what
+		// magpie stashed and remembers setting goes, so the Agents page
+		// shows Mem as not connected rather than changed outside magpie,
+		// and the first read after a start isn't taken for this magpie's
+		// while the address hasn't answered (memOn). Asked once as the page
+		// is drawn: a start's first one waits for that answer.
+		Follow: func() error {
+			s, _ := now()
+			p, ok := s.Providers[magpieID]
+			if !ok || !onAnotherMachine(memBase(p)) {
+				return nil
+			}
+			memAsked(s)
+			if !memElsewhere(p) {
+				return nil
+			}
+			if unstashPeek(keyPrev) != "" {
+				forget(keyPrev)
+			}
+			if unstashPeek("nowledge-mem.connect.was") != "" {
+				forget("nowledge-mem.connect.was")
+			}
+			(&Agent{ID: "nowledge-mem"}).forgetSetUp()
+			return nil
+		},
 		Check: func() string {
 			s, _ := now()
 			p, on := memOn(s, unstashPeek(keyPrev) != "")
@@ -322,11 +401,21 @@ func nowledgeMem(home string) *Agent {
 			},
 			Set: func(v string) error {
 				s, c := now()
+				memAsked(s)
 				if ref, ok := strings.CutPrefix(v, magpieID+"/"); ok && isMagpie(ref) {
 					if c == nil {
 						return errMemDown
 					}
 					return wire(c, s, ref)
+				}
+				// magpie's provider the user pointed at another machine
+				// since magpie set it up is theirs (memElsewhere): Alex on
+				// Discord imported the magpie on their server over it, and
+				// Disconnect removed it, as it wasn't there before magpie.
+				// What magpie stashed goes, and Mem is left as the user has
+				// it, as for a magpie on a server never set up here.
+				if p, ok := s.Providers[magpieID]; ok && memElsewhere(p) {
+					forget(keyPrev)
 				}
 				_, on := memOn(s, unstashPeek(keyPrev) != "")
 				if p, ok := s.Providers[s.Active]; ok && !on {

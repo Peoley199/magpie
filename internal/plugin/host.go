@@ -32,6 +32,7 @@ import (
 	"github.com/yetone/magpie/internal/netproxy"
 	"github.com/yetone/magpie/internal/proc"
 	"github.com/yetone/magpie/internal/settings"
+	"github.com/yetone/magpie/internal/steady"
 )
 
 //go:embed host.js
@@ -72,6 +73,9 @@ type message struct {
 	Title    string `json:"title"`
 	Variant  string `json:"variant"`
 	Count    int    `json:"count"`
+	// Again is an "auth" event's account signed in already and only
+	// saved again: a token renewed, a field its plugin keeps beside it
+	Again bool `json:"again"`
 	// Loads is a "load" event's models and how busy each is, a percent;
 	// -1 clears one (magpie.load in host.js)
 	Loads map[string]float64 `json:"loads"`
@@ -184,8 +188,10 @@ var (
 	frameOverhead = 2048
 	rpcReserve    = 64
 	// maxWireLine bounds one line the child writes: a frame's base64 is well
-	// under it, and so is any RPC result, so a child that never ends a line
-	// fails the host rather than making it allocate without bound.
+	// under it, so a child that never ends a line fails the host rather than
+	// making it allocate without bound. The child is told it at init
+	// (lineMax): an answer longer than it fails its own call there instead,
+	// and a gateway begin no hook changed sends no body back (#5699).
 	maxWireLine = 32 << 20
 	// streamWait is how long a fetch waits for a stream's window to come
 	// free when the budget's are all held, while its request lives. Past
@@ -541,6 +547,8 @@ var live = struct {
 	hosts map[*host]bool
 	// ended is set by EndHosts: no host starts after it
 	ended bool
+	// efficient puts running and newly started hosts in Windows' EcoQoS
+	efficient bool
 }{hosts: map[*host]bool{}}
 
 // errHostsEnded is a host asked for once EndHosts has run.
@@ -805,8 +813,33 @@ func listed() {
 	}
 }
 
-func changed() {
-	forgetProviders()
+func changed() { changedBy(false) }
+
+// changedBy is changed, told by the host (a sign-in a plugin or its
+// sign-in saved) or by magpie itself: what the host tells starts a
+// listing again only at the pace relistWait allows (forgetProvidersBy).
+func changedBy(host bool) {
+	forgetProvidersBy(host)
+	tellChanged()
+}
+
+// savedAgain is told of the sign-in at account, of the plugin provider
+// named, saved again by the host: a token renewed, a field the plugin
+// keeps beside it. The sign-ins are read again and what is built on them
+// follows (OnChange), but the plugins are not asked their lists again
+// for it, unless that account's last list failed, when the sign-in just
+// saved may be what it lacked. Every plugin was asked again for each
+// such save, and a models hook that saves its sign-in as it is asked
+// then had every plugin listed again at once, over and over: 5 GB of
+// model lists and catalogs in minutes (JackChen on Discord).
+func savedAgain(provider, account string) {
+	if listFailed(provider, account) {
+		forgetProvidersBy(true)
+	}
+	tellChanged()
+}
+
+func tellChanged() {
 	changedNow()
 	onChangeMu.Lock()
 	fs := append([]func(){}, onChange...)
@@ -993,17 +1026,20 @@ func hostScript(name string, js []byte) (string, error) {
 	sum := sha256.Sum256(js)
 	dir := filepath.Join(filepath.Dir(catalog.CachePath()), "plugin-host")
 	p := filepath.Join(dir, name+"-"+hex.EncodeToString(sum[:6])+".js")
-	if b, err := os.ReadFile(p); err == nil && string(b) == string(js) {
+	if b, err := steady.ReadFile(p); err == nil && bytes.Equal(b, js) {
 		return p, nil
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	tmp := p + ".tmp"
-	if err := os.WriteFile(tmp, js, 0o644); err != nil {
-		return "", err
+	if err := steady.WriteFile(p, js, 0o644); err != nil {
+		// Another instance may have put the same script there and opened
+		// it for Bun, so Windows won't let us rename ours over it.
+		if b, readErr := steady.ReadThere(p); readErr != nil || !bytes.Equal(b, js) {
+			return "", err
+		}
 	}
-	return p, os.Rename(tmp, p)
+	return p, nil
 }
 
 // get is the running host, started (Bun downloaded, the plugins loaded)
@@ -1166,6 +1202,9 @@ func startOn(ctx context.Context, bun string) (*host, bool, error) {
 		live.Unlock()
 		return nil, false, err
 	}
+	if live.efficient {
+		tree.SetEfficiencyMode(true)
+	}
 	hctx, hcancel := context.WithCancel(context.Background())
 	h := &host{
 		cmd: cmd, in: in,
@@ -1233,6 +1272,7 @@ func startOn(ctx context.Context, bun string) (*host, bool, error) {
 		"plugins":       items,
 		"loadMillis":    pluginLoadWait.Milliseconds(),
 		"listMillis":    pluginListWait.Milliseconds(),
+		"lineMax":       h.lineLimit(),
 		"heavy": map[string]any{
 			"mb":          heavyMB,
 			"afterMillis": heavyAfter.Milliseconds(),
@@ -1447,7 +1487,11 @@ func (h *host) dispatch(m message) {
 	if m.ID == 0 {
 		switch m.Event {
 		case "auth":
-			changed()
+			if m.Again {
+				savedAgain(m.Provider, m.Account)
+			} else {
+				changedBy(true)
+			}
 		case "recovered":
 			// the host read plugin-auth.json from its last good
 			// generation (#1505): the GUI says so

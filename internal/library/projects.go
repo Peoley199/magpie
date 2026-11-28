@@ -41,6 +41,9 @@ type Project struct {
 	// wrote in each server's entry there (Codex's startup_timeout_sec):
 	// one other than this is the user's
 	Startup map[string]map[string]float64 `json:"startup,omitempty"`
+	// Calls are, by the project's file, the tool timeout magpie wrote in
+	// each server's entry there, as Applied's
+	Calls map[string]map[string]float64 `json:"calls,omitempty"`
 	// MadeFiles are the files magpie made to write servers in, listed in
 	// the .gitignore and taken away again once nothing's left in them
 	MadeFiles []string `json:"madeFiles,omitempty"`
@@ -114,7 +117,8 @@ type Project struct {
 // the repository's root, Gemini CLI, OpenCode, Pi, Cursor, Copilot, Antigravity,
 // Kimi Code, Goose and Grok Build, Droid — docs.factory.com/cli/configuration/
 // skills — and Cline's CLI, which reads .clinerules, .cline and .agents
-// skills folders in the workspace, @cline/shared 3.0.70) that one, so that
+// skills folders in the workspace, @cline/shared 3.0.70, and Dim, which
+// reads <cwd>/.agents/skills, arcships/dim's skills catalog) that one, so that
 // one folder serves them all. Qoder (and Qoder CN) read .qoder/skills
 // (getProjectSkillsDir, @qoder-ai/qodercli 1.1.69, whose .agents/skills
 // a setting can turn off), CodeBuddy Code .codebuddy/skills
@@ -129,7 +133,8 @@ type Project struct {
 // cordis.patch.yml in every profile; the same since 0.0.1-rc.3), so it is
 // given the shared one. A project folder inside a repository but not at
 // its root isn't read by dsh: run there, it looks in the repository's
-// root (#5172). MiMo Code, Crush,
+// root (#5172). Bub reads <workspace>/.agents/skills (iter_skill_roots,
+// bub/skills.py 0.6.2). MiMo Code, Crush,
 // ZCode and oh-my-pi say of no project folder magpie can rely on.
 var projectSkillsDirs = map[string]string{
 	"claude":      ".claude/skills",
@@ -148,6 +153,8 @@ var projectSkillsDirs = map[string]string{
 	"cline":       ".agents/skills",
 	"dsh":         ".agents/skills",
 	"ds-bot":      ".agents/skills",
+	"dim":         ".agents/skills",
+	"bub":         ".agents/skills",
 	"qoder":       ".qoder/skills",
 	"qoder-cn":    ".qoder/skills",
 	"codebuddy":   ".codebuddy/skills",

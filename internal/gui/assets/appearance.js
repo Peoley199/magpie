@@ -15,12 +15,28 @@ window.lookPaint = async function () {
     let st = document.getElementById("lookCSS");
     if (!st) document.head.append((st = Object.assign(document.createElement("style"), { id: "lookCSS" })));
     st.textContent = r.css || "";
+    if (r.mark) markApp(r.mark);
     // the accent is in the panel's tint and the title bar too
     if (typeof tintPanel == "function") tintPanel(0);
   } catch { /* the look stays as drawn */ }
 };
 
+// the tab's favicon, the home screen's icon and the standalone window's
+// colours in the accent (webappmark.go, eachg0 on X), as boot.js puts
+// them in: a new address, so the tab draws the new bird at once
+function markApp(m) {
+  const set = (s, a, v) => { const e = document.head.querySelector(s); if (e && v && e.getAttribute(a) !== v) e.setAttribute(a, v); };
+  set('link[rel="icon"]', "href", m.icon);
+  set('link[rel="apple-touch-icon"]', "href", m.touch);
+  set('meta[name="theme-color"][media*="light"]', "content", m.light);
+  set('meta[name="theme-color"][media*="dark"]', "content", m.dark);
+}
+
 window.drawLook = function (s, keep) {
+  // Increase contrast: left to the system, it shows what the system asks
+  // for, and either choice is the user's from then on (usrname1833)
+  $("#contrastSegs").title = t("Darker text, clearer edges and selection, as with the system's Increase Contrast");
+  $("#contrastSegs").replaceChildren(segsOO(s.contrast === "more" || (!s.contrast && matchMedia("(prefers-contrast: more)").matches), (v) => savePrefs({ ...keep, contrast: v ? "more" : "normal" })));
   $("#colorblindSegs").title = t("Colorblind-safe chart colors, and each allowance window's line in a dash of its own");
   $("#colorblindSegs").replaceChildren(segsOO(s.colorblind, (v) => savePrefs({ ...keep, colorblind: v })));
   $("#reduceMotionSegs").title = t("Animations stand still, as with the system's Reduce Motion, so magpie keeps the computer less busy");

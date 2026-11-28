@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/yetone/magpie/internal/artifact"
+	"github.com/yetone/magpie/internal/gateway"
 )
 
 func artifactsSandbox(t *testing.T) {
@@ -17,7 +18,7 @@ func artifactsSandbox(t *testing.T) {
 	dir := t.TempDir()
 	old := artifact.Dir
 	artifact.Dir = func() string { return dir }
-	t.Cleanup(func() { artifact.Dir = old })
+	t.Cleanup(func() { artifact.CloseDBs(); artifact.Dir = old })
 }
 
 // `magpie artifacts` does what Work › Artifacts does: lists them newest
@@ -97,9 +98,57 @@ func TestArtifactsCommand(t *testing.T) {
 
 // `magpie artifacts share` prints the link the list then shows, and
 // unshare takes it down; neither takes a version.
+// `magpie artifacts` lists them at MAGPIE_WEB_URL, else MAGPIE_PUBLIC_URL,
+// as given, as magpie web's answers to agents do (#8014: in a container
+// it listed http://127.0.0.1:3425), and at this computer's address
+// without either. open opens this computer's browser, at this computer's.
+func TestArtifactsCommandListsThePublicAddress(t *testing.T) {
+	artifactsSandbox(t)
+	t.Setenv("LAZYCAT_APP_DOMAIN", "")
+	var opened []string
+	old := openArtifact
+	openArtifact = func(u string) error { opened = append(opened, u); return nil }
+	t.Cleanup(func() { openArtifact = old })
+	a, err := artifact.PublishPage(artifact.Publish{Page: []byte("<title>Q3</title>"), Agent: "codex"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ public, web, at string }{
+		{"https://123.abc:666/magpie/", "", "https://123.abc:666/magpie"},
+		{"https://123.abc:666", "", "https://123.abc:666"},
+		{"https://123.abc:666", "https://page.example:667", "https://page.example:667"},
+		{"", "", gateway.URL()},
+	} {
+		t.Setenv("MAGPIE_PUBLIC_URL", c.public)
+		t.Setenv("MAGPIE_WEB_URL", c.web)
+		var b bytes.Buffer
+		if err := artifactsTo(&b, nil, time.Now()); err != nil || !strings.Contains(b.String(), "\n  "+c.at+"/a/"+a.ID+"/\n") {
+			t.Errorf("%q %q: list %q %v", c.public, c.web, b.String(), err)
+		}
+		b.Reset()
+		var rows []struct {
+			URL      string
+			Versions []struct{ URL string }
+		}
+		if err := artifactsTo(&b, []string{"--json"}, time.Now()); err != nil || json.Unmarshal(b.Bytes(), &rows) != nil || len(rows) != 1 ||
+			rows[0].URL != c.at+"/a/"+a.ID+"/" || rows[0].Versions[0].URL != c.at+"/a/"+a.ID+"@1/" {
+			t.Errorf("%q %q: --json %s %v", c.public, c.web, b.String(), err)
+		}
+		b.Reset()
+		opened = nil
+		if err := artifactsTo(&b, []string{"open", a.ID}, time.Now()); err != nil || len(opened) != 1 || opened[0] != gateway.URL()+"/a/"+a.ID+"/" {
+			t.Errorf("%q %q: open %v %v", c.public, c.web, opened, err)
+		}
+	}
+}
+
 func TestArtifactsShareCommand(t *testing.T) {
 	artifactsSandbox(t)
 	site := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/owner") {
+			w.Write([]byte(`{"code":"c0de","url":"https://usemagpie.ai/a/abcdefghijklmnop#owner=c0de"}`))
+			return
+		}
 		if r.Method == http.MethodPost {
 			w.WriteHeader(http.StatusCreated)
 			w.Write([]byte(`{"id":"abcdefghijklmnop","url":"https://usemagpie.ai/a/abcdefghijklmnop","token":"tok","version":1}`))
@@ -119,11 +168,21 @@ func TestArtifactsShareCommand(t *testing.T) {
 	if _, err := run("unshare", a.ID); err == nil {
 		t.Fatal("unshared one never shared")
 	}
+	var opened []string
+	was := openArtifact
+	openArtifact = func(u string) error { opened = append(opened, u); return nil }
+	t.Cleanup(func() { openArtifact = was })
+	if _, err := run("open-shared", a.ID); err == nil || !strings.Contains(err.Error(), "isn't shared") || len(opened) != 0 {
+		t.Fatalf("open-shared, not shared: %v %v", err, opened)
+	}
 	if _, err := run("share", a.ID+"@1"); err == nil {
 		t.Fatal("shared a version")
 	}
 	if out, err := run("share", a.ID); err != nil || !strings.Contains(out, link) {
 		t.Fatalf("share: %q %v", out, err)
+	}
+	if out, err := run("open-shared", a.ID); err != nil || !strings.Contains(out, "as its owner") || len(opened) != 1 || opened[0] != link+"#owner=c0de" {
+		t.Fatalf("open-shared: %q %v %v", out, err, opened)
 	}
 	if out, _ := run(); !strings.Contains(out, "shared: "+link) {
 		t.Fatalf("list:\n%s", out)

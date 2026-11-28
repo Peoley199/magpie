@@ -36,6 +36,9 @@ var readOnlyRefused = []string{
 	"DELETE " + ChatPagePath + "/anthropic/v1/files/{id}",
 	"POST " + ChatPagePath + "/v1/tools/asr",
 	"POST " + ChatPagePath + "/v1/tools/tts",
+	// CLIProxyAPI's management routes but its usage reads: its writes
+	// (reset-quota, auth-files' own), answered 404 or 405 to anyone
+	mgmtPattern,
 	// a Codex reset, which can't be undone (#3850)
 	"POST " + provider.RemoteCodexResetPath,
 	// an update another magpie asks for
@@ -67,7 +70,7 @@ var readOnlyRefused = []string{
 	SearchMCPPath, VisionMCPPath, ImageMCPPath, ImageMCPFiles + "{name}",
 	BrowserMCPPath, MemoryMCPPath, SessionsMCPPath, ArtifactsMCPPath, "GET " + ArtifactPagePath + "{ref}", "GET " + ArtifactPagePath + "{ref}/{path...}",
 	"POST " + ArtifactPagePath + "{ref}/_api/db", "GET " + ArtifactPagePath + "{ref}/_api/events",
-	"POST " + ArtifactPagePath + "{ref}/_api/publish", "POST " + ArtifactPagePath + "{ref}/_api/meta", "POST " + ArtifactPagePath + "{ref}/_api/upload", "POST " + ArtifactPagePath + "{ref}/_api/assets", "GET " + artifactBlobPath + "{id}", "GET " + BrowserExtensionPath, "GET " + BrowserStatusPath, ToolsMCPPath, ToolsMCPOne + "{plugin}",
+	"POST " + ArtifactPagePath + "{ref}/_api/publish", "POST " + ArtifactPagePath + "{ref}/_api/meta", "POST " + ArtifactPagePath + "{ref}/_api/upload", "POST " + ArtifactPagePath + "{ref}/_api/assets", "POST " + ArtifactPagePath + "{ref}/_api/sample", "GET " + ArtifactPagePath + "{ref}/_api/live", "POST " + ArtifactPagePath + "{ref}/_api/files", "POST " + ArtifactPagePath + "{ref}/_api/mcp", "POST " + ArtifactPagePath + "{ref}/_api/dictation", "POST " + ArtifactPagePath + "{ref}/_api/tts", "GET " + ArtifactPagePath + "{ref}/_api/shell", "POST " + ArtifactPagePath + "{ref}/_api/comments", "GET " + artifactBlobPath + "{id}", "GET " + BrowserExtensionPath, "GET " + BrowserStatusPath, ToolsMCPPath, ToolsMCPOne + "{plugin}",
 	HubMCPPath + "{agent}", HubMCPAll, CodexPath + "/", "GET " + CodexCatalogPath,
 	"GET /v1beta/models", "POST /v1beta/models/{call...}", "/",
 }

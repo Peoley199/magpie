@@ -517,7 +517,9 @@ func (s *Server) Relisten() error {
 	// where it listens now is what a command in another shell is told
 	defer func() { recordListening(s.ln.Addr()) }()
 	to := listenAddr()
-	if s.ln.Addr().String() == to {
+	// 0.0.0.0 reads back as [::]: by string it was never the same, and
+	// every look closed and opened the socket again
+	if listensAt(s.ln.Addr(), to) {
 		return nil
 	}
 	was := s.ln.Addr().String()
@@ -635,6 +637,13 @@ func lanGuard(next http.Handler) http.Handler {
 		// and no key (imageTokenAsked); the handler judges the token, and
 		// refuses one that opens nothing as a request without a key
 		if remote && imageTokenAsked(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		// so does an artifact's page an agent on another computer was
+		// given the address of: its id opens it, read-only, without its
+		// store (artifactPageAsked)
+		if remote && artifactPageAsked(r) {
 			next.ServeHTTP(w, r)
 			return
 		}

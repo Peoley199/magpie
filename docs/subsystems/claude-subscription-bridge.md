@@ -210,9 +210,12 @@ talks to it as it talks to `-p`: stream-json in and out. The helper:
   (and the web search `-p` was given) are allowed, and nothing else is
   offered (`--tools ""`). A new session is given `--session-id`;
 - starts Claude Code in a pseudo-terminal of its own (200x50), no tmux,
-  and answers what it asks of the terminal. On macOS and Linux it is a
-  pty in a session of its own (`child_unix.go`). On Windows it is a
-  pseudo console (ConPTY, `child_windows.go`): `CreatePseudoConsole` on
+  and answers what it asks of the terminal. The terminal is
+  [TUI driving](tui-driving.md)'s `tuidrive.Term`, the same for any
+  agent; what is Claude Code's own (its screens, the paste, the
+  transcript) stays in `internal/claudetui`. On macOS and Linux it is a
+  pty in a session of its own (`term_unix.go`). On Windows it is a
+  pseudo console (ConPTY, `term_windows.go`): `CreatePseudoConsole` on
   two pipes, and `CreateProcess` with the console as an attribute and
   `STARTF_USESTDHANDLES` with no handles, since without it a child
   took the helper's own standard handles (the bridge's pipes) and drew
@@ -535,7 +538,7 @@ an appeal and the request goes on to the next account or member
 drops the marks.
 
 On Windows 10 the helper doesn't use Windows' own ConPTY when it can
-avoid it (#5205; `console` in `child_windows.go`). In order: a `conpty`
+avoid it (#5205; `console` in `internal/tuidrive/term_windows.go`). In order: a `conpty`
 folder beside magpie.exe holding `conpty.dll` and `OpenConsole.exe`, the
 user's own; then, below build 22000 (`win11`), the pair a release carries
 (`internal/conptypair`): Microsoft.Windows.Console.ConPTY
@@ -862,10 +865,10 @@ last drawn (`TestShimWaitsPastTheBanner`, `TestUsageDrawn`). Its result (`local_
 do, "Current session: 99% used · resets 7pm (Asia/Shanghai)" (`usageText`,
 tested on the bytes Claude Code 2.1.316 drew, `testdata/usage-2.1.316.bin`),
 for `provider.parseClaudeUsage`.
-The helper reads the screen as a terminal shows it (`grid`,
-[`screen.go`](../../internal/claudetui/screen.go), 200 by 50, the size
+The helper reads the screen as a terminal shows it (`tuidrive.Grid`,
+[`screen.go`](../../internal/tuidrive/screen.go), 200 by 50, the size
 the pseudo-terminal and Windows' pseudo console are made, from one
-`screenCols`/`screenRows`; an 80 by 24 grid of the 200 by 50 Unix
+`tuidrive.Cols`/`tuidrive.Rows`; an 80 by 24 grid of the 200 by 50 Unix
 terminal drew the panel's rows over one another, #4988), beside the stream:
 Windows' pseudo console sends only the cells that changed, skipping one
 that holds the same letter ("Settin\x1b[1Cs"), and a window drawn only
@@ -1407,6 +1410,11 @@ without it and is sent the protocol's pings until the run speaks
 (`keepBridgeHeard`, #5043): the replay of a long conversation can take
 minutes before its first word, and Claude Code hung up at 599s and
 started again from the replay, writing it to the cache once more (#3808).
+If the run then ends without an answer, the stream ends with its
+protocol's error event carrying the reason and, for a retryable status
+whose reason alone does not say so, a retry hint (`relayFailing`, #7849).
+With the HTTP headers still unsent, the failure can go out as a 502.
+`TestClaudeSilentTurnFailsAfterKeepalive` holds all three stream formats.
 See [gateway routing](gateway-routing.md) for the keepalive rules.
 
 magpie ends a run (`abort`) by asking Claude Code to end with SIGTERM
@@ -1643,8 +1651,18 @@ unnamed takes the named owner of the same provider's own sign-in
 (`takeNamedOwner`), and goes on: a run in Claude Code's own home runs as
 whatever that home is signed in to. A turn that ends without a tool call
 takes the name before its keys are made (`nameOwner`, from
-`provider.ClaudeOwnName`), so the next turn finds the idle run. Every
-other change of owner still lets the run go. The owner is an atomic
+`provider.ClaudeOwnName`), so the next turn finds the idle run.
+
+Any other owner's request gets a run of its own and leaves the waiting
+run alone: it isn't claimed, and its pending calls and timer stay as
+they were. A fork sub-agent routed to another account answers its lead's
+calls by their ids, and the lead's own results still come on the run's
+account. Until 11-26 the run was let go for the fork, mid-turn, and the
+lead's results were told whole to a new run (recih, #7852). Only the same
+login moved between Claude Code's home and a saved one (owners equal but
+for `own`) lets the run go, when it can claim it: the process in the
+home now reads another sign-in. `TestClaudeToolResultsKeepTheSelectedAccount`
+holds both. The owner is an atomic
 pointer (`owned`), read by the run's reader without a lock.
 
 ### A conversation the client rewrote (#912)
@@ -1836,6 +1854,47 @@ On 10-27, a sandbox `magpie serve` with a made-up Claude sign-in and real
 Claude Code 2.1.311 against a mock API got 8 concurrent subagent-like
 requests. It kept 6 Claude Code and 6 helpers, and the list named the same
 6 pids that `ps` showed. Quitting magpie ended all 12 within a second.
+
+### What a hidden run shows (`?screen=1`, #8075)
+
+An interactive run's Claude Code draws into a terminal no one sees
+(`tuidrive.Term`, 200x50 in the helper), and one that seemed stuck said
+nothing of where until it ended (FremontDango on Discord). Asked with
+`?screen=1`, the list gives each run's `screen`, the terminal's rows as
+drawn (`Term.Screen`: boxes and spacing kept, the blank rows under them
+left out), or `screenWhy` when there is none: a `-p` run draws no screen,
+one not drawn yet, or one whose read failed. Without it nothing is read, so
+`magpie claude-code runs` and its polls cost what they did.
+
+The gateway asks the helper over its stdin (`subscriptionRun.screen`): a
+`control_request` of subtype `claudetui.ScreenRequest` with a `screen-`
+request id, answered by a `control_response` whose `response.rows` are the
+screen. The helper reads its stdin from the start, in a goroutine of its
+own (`reading`), so it answers while Claude Code is still starting, while
+a turn is typed in and while its reply is read (`looked`, which writes past
+everything held); every other line goes on, in order, to the loop that was
+there before (`take`), so `initialize` is still answered after `ready`.
+The gateway's reader (`readOutput`) hands a `screen-` reply to its waiter
+before anything else is done with the line, so it never settles a turn's
+unstreamed message. Each run is asked at once and given `screenWait` (2s);
+a run that doesn't answer in time says so and holds up no other.
+
+Nothing leaves the process unmasked: `screenSafe` replaces the home folder
+in each of its spellings, and any other user's (`homeSafe`, which
+`logSafe` uses too), and scrubs tokens and keys as the logs do
+(`redact.Scrub`). Nothing is typed into the terminal; there is no route
+that does.
+
+`magpie claude-code screen [pid]` prints each run's line and its screen,
+or why there is none. The Claude Code provider editor's Claude Code runs as
+row has Show screen in the interactive mode (`claudemode.js`), which opens
+each run's screen under the row and reads `GET /api/claude/screens` every
+second while it is open (`claudescreen.js`, imported on the first press):
+the GUI's Go side asks the gateway (`claude_screens.go`), since the
+gateway's route answers no page. `TestClaudeRunsShowTheScreen`,
+`TestShimShowsItsScreenWhileStarting`, `TestScreenAsDrawn`,
+`TestClaudeCodeScreenPrintsEachRunsScreen`, `TestClaudeScreensAskTheGateway`,
+`claude-screen.test.cjs`.
 
 ## How large one Claude Code process may grow (`claudeRunBudget`, #3256)
 
@@ -2347,27 +2406,46 @@ Regions Policy, before Claude subscription requests go out from there.
   Gibraltar, Réunion, Greenland…). Hong Kong and Macao are China's, which
   isn't listed. Ukraine is listed except for five regions a country code
   can't tell apart, so a way out in Ukraine always reads as supported.
+- **The user's own list** (mamba on Discord; Claude editor → Advanced →
+  Allowed ways out, `claudeWaysOut`). Regions by ISO code, IPs and CIDR
+  ranges (`settings.WayOut`; saving anything else is refused, `us` is
+  kept as `US`). Empty, Anthropic's list judges. Set, it alone judges: a
+  way out is OK when its region or its address is in it, and the result
+  says `mine`. A region the list needs and the lookup couldn't tell, or
+  an address it needs and the trace didn't give, is Unknown. A stored
+  result is judged again against the list each time it is read
+  (`egress.Of`), so a list changed counts at once; the GUI looks again
+  after saving one too.
 - **The lookup.** `egress.Check` asks Cloudflare's
-  `https://www.cloudflare.com/cdn-cgi/trace` for its `loc=` through the
+  `https://www.cloudflare.com/cdn-cgi/trace` for its `loc=` and `ip=` through the
   same proxy choice the Claude accounts' requests use (`ProxyOfLogin` over
   the Claude logins, `provider.ClaudeProxies`; `""` is magpie's own proxy
   setting), once per distinct choice. `XX`, `T1` (Tor), an empty or
   malformed code, a non-200 or a failed request are **Unknown**, which is
   neither fine nor unsupported: it draws nothing and holds nothing.
-- **When.** Never per request. `egress.Keep` (started by the gateway's
-  `ListenAndServe`) looks up at the start, again when the network or the
+- **When.** `egress.Keep` (started by the gateway's
+  `ListenAndServe`, and by the window's `startBackend`, one at a time in a
+  process: a window whose gateway another magpie serves looks up for its
+  own page and tray too) looks up at the start, again when the network or the
   set of proxy choices changes (a fingerprint of the interfaces' addresses
   and the choices, polled every 20s), every 15 minutes otherwise, and
   when the GUI's Check again or a never-looked-up choice asks
   (`egress.Again`). No Claude account, no lookup. A node switched inside
-  a proxy app changes nothing magpie can see, so it shows at the next
-  15-minute lookup, or at once with Check again.
+  a proxy app changes nothing magpie can see: with the hold off it shows
+  at the next 15-minute lookup, or at once with Check; with the hold on,
+  a request looks again itself (below).
 - **What is shown.** `/api/providers` gives the Claude row `egress`, the
   worst result over its choices (`egress.Worst`: Unsupported over Unknown
   over OK). Unsupported draws a line over the Providers list
   (`egress.js`, imported only then) naming the region in the reader's
-  language, with Check again (`POST /api/egress/check`), and the tray's
-  tooltip begins with a warning (`trayEgressTip`). Neither says anything
+  language (with the address, and the user's list rather than
+  Anthropic's, when `mine`), with Check again (`POST /api/egress/check`),
+  and the tray's tooltip begins with a warning (`trayEgressTip`). The
+  Claude editor's Advanced shows the way out itself, address · region,
+  with Check (`wayOutRow`). With none in the list it read (one read
+  before the first lookup ended), the editor looks it up once as it
+  opens (`wayOutShown`, at most every 30s); a lookup that failed reads
+  "Couldn't look it up", not "Not looked up yet". Neither says anything
   of bans or of keeping an account safe: the policy is Anthropic's, and
   magpie can only say where the way out is.
 - **The hold** (Claude editor → Advanced → Hold requests outside supported
@@ -2375,9 +2453,13 @@ Regions Policy, before Claude subscription requests go out from there.
   a Claude subscription request whose choice last read Unsupported, before
   any Claude Code starts: in the gateway's `attempt` (a 502 whose text
   starts `magpie held this Claude request`, `egress.HeldWords`) and in
-  `proxied` (warm-ups and usage reads through Claude Code). An Unsupported
-  older than 30s is looked up again first, so a proxy turned back on lets
-  the request go. `failure` reads a held reply as `failProxy`: nobody
+  `proxied` (warm-ups and usage reads through Claude Code). A result of
+  any state older than 30s (`Fresh`) is looked up again first, within
+  5s (`HoldTimeout`), so a proxy turned back on lets the request go and
+  a node switched to another country is held. Requests that come while
+  such a lookup is under way wait on it (`recheck`): one lookup per
+  choice, not one each. A lookup that fails is Unknown and holds
+  nothing. `failure` reads a held reply as `failProxy`: nobody
   rests, and the next account or member is asked. A choice not looked up
   yet goes, and asks for a lookup.
   - It is off by default because Cloudflare's `loc` can differ from what
@@ -2478,7 +2560,7 @@ go test -tags nogui ./internal/gateway/ -run 'TestClaudeSyntheticResume|TestClau
 go test -tags nogui ./internal/gateway/ -run '^TestClaudeClientCache' -count=1
 go test -tags nogui ./internal/gateway/ -run '^TestClaudeLeanPrompt' -count=1
 go test -tags nogui ./internal/gateway/ -run '^TestClaudeTUIChosen$' -count=1
-go test ./internal/claudetui/ -count=1
+go test ./internal/claudetui/ ./internal/tuidrive/ -count=1
 go test -tags nogui ./internal/claudecode/ -count=1
 go test -tags nogui ./internal/claudecode/ -run TestKeepCurrent -count=1
 go test -tags nogui ./internal/gateway/ -run '^TestClaudeCodeGivenTheBridgeForASOCKSProxy$' -count=1

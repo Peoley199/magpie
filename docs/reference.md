@@ -4,8 +4,9 @@ The full manual: every agent magpie wires, every provider option, the gateway, r
 
 Renamed a project folder? See [relocating Claude Code sessions](session-relocation.md).
 
-One place to pick every agent's model: Codex on DeepSeek, Claude Code
-on Kimi, Gemini CLI on GLM, from the menu bar. [usemagpie.ai](https://usemagpie.ai)
+Every plan you pay for, in one pool, for any agent: Claude Code on your
+ChatGPT Pro, Codex on your Claude Max, Claude Desktop on your GLM Coding
+Plan. When one runs out, the next takes over. [usemagpie.ai](https://usemagpie.ai)
 
 [![Discord](https://img.shields.io/badge/Discord-join%20the%20community-5865F2?logo=discord&logoColor=white)](https://discord.gg/vGSnD3ZKQF)
 
@@ -145,6 +146,7 @@ line; agents connected to magpie lose it when it quits.
 | jcode        | `config.toml` in `$JCODE_HOME`, else `~/.jcode` | model (a `[providers.magpie]` profile, `openai-compatible`, with magpie's models in it; `[provider] default_provider`/`default_model` set to it, what was there put back on Disconnect; the user's own keys in the profile, such as `headers` and a model's `reasoning_effort`, kept; restart open jcode sessions after connecting) |
 | Dim (alpha, `dima`) | Dim's built-in **Magpie** provider, through Dim's own daemon (`$DIMCODE_HOME`, else `~/.dimcode-alpha`), and magpie's own `dim.json` beside its settings | model (Dim's Magpie provider gets the gateway's `/v1` and magpie's key, is turned on and made Dim's model, so a plain `dima` runs on magpie; no other provider is touched, and a key or address you set on the Magpie entry yourself is kept. Picking Dim's own again turns the entry off and puts back the model Dim was on. When Dim's daemon can't be reached, a `dima` function in your shell profiles starts it with `DIM_BASE_URL`, `DIM_API_KEY`, `DIM_MODEL` and the token limits for that run instead) |
 | Mistral Vibe | `config.toml` in `$VIBE_HOME`, else `~/.vibe` | model (a `[[providers]]` entry named magpie with the gateway's `/v1` and the key as an `Authorization` header in `extra_headers`, since Vibe reads keys only from the environment; one `[[models]]` entry per model, aliased `magpie/<provider>/<model>`; `active_model` set to the alias, what was there put back on Disconnect; a `thinking` level the user set on a model kept; restart open vibe sessions after connecting). Vibe Desktop (bundle `ai.mistral.lechat.desktop`; `le-chat-desktop\Vibe.exe` on Windows) runs the same app server on the same file, lists the agent with no CLI installed, and reads the file when a chat starts |
+| Bub | `config.yml` in `$BUB_HOME`, else `~/.bub` | model (a `providers.magpie` entry, Republic's `magpie` type with the gateway's `/v1` and the key naming Bub, `openai` on a Bub 0.5 install; `model` set to `magpie:<provider>/<model>`, what was there, and an entry of your own named magpie, put back on Disconnect; Bub lists the provider's models itself; restart open bub sessions after connecting) |
 | MiniMax Code (mcode) | `~/.minimax/config.yaml` (`$MINIMAX_DATA_DIR`, or the folder the desktop app moved it to) | model (a `magpie` custom provider; magpie's models in its /model) |
 | Droid (Factory) | `~/.factory/settings.json` (`$FACTORY_HOME_OVERRIDE`) | model (magpie's models as BYOK `customModels`, in Droid's /model) |
 | Cline (CLI)  | `~/.cline/data/settings/providers.json` (`$CLINE_DIR`) | model, effort (magpie takes its openai-compatible provider) |
@@ -227,7 +229,8 @@ a local test upstream, with no vendor credentials.
 #### DeepSeek Harness: the DeepSeek row by hand
 
 Connecting dsh gives it magpie's own routes on dsh's pi-ai adapter
-(`magpie`, `magpie-responses`, `magpie-anthropic`). dsh's DeepSeek row
+(`magpie`, `magpie-responses`, `magpie-anthropic`, and
+`magpie-gemini` from dsh 0.2.2-rc.2). dsh's DeepSeek row
 (`llm-deepseek`, the `deepseek-official` route) is dsh's: magpie never
 points it anywhere, and Disconnect leaves an entry of yours there alone.
 That row does more for DeepSeek's own models than pi-ai does: when dsh's
@@ -719,6 +722,7 @@ magpie gateway-key limit <id> reset    # count its usage from 0 again (reset 2: 
 magpie gateway-key limit <id> off      # no limit
 magpie gateway-key models <id> openai/gpt-5 anthropic/*   # only these models
 magpie gateway-key models <id> all     # every model
+magpie gateway-key models <id> none    # no model: a key for MCP servers only
 magpie gateway-key accounts <id> codex/me@example.com   # only these accounts
 magpie gateway-key accounts <id> codex/!me@example.com  # every account but these, later ones too
 magpie gateway-key accounts <id> all    # every account
@@ -791,7 +795,11 @@ budget, models or accounts is also told `heldTo` (`budget`, `models`,
 `accounts`), `models` (what it may use), `quotas` (whether its owner lets
 it see quotas and the status line) and, while that is on,
 `quotaProviders` (the providers whose cards it is told); `limited` stays
-about its budget alone. A magpie that has this
+about its budget alone. A key that may use all of magpie (no budget,
+models, accounts or MCP servers, not read-only, issued or expiring, no
+cap on requests at once) is told `full: true`; a magpie that adds this
+one as a Remote magpie with such a key takes its MCP servers, skills and
+prompts at once. A magpie that has this
 one as a Remote magpie provider shows each of its keys' limits on its
 Usage page this way (#1547). Requests from
 this computer that send no gateway key are not limited; a gateway key used
@@ -870,6 +878,31 @@ under a held key is held to its issuer's list too. `GET /v1/magpie/limit`
 tells a held key its list as `mcp`. A model's own web search, which magpie
 serves through its search when the provider has none, is not an MCP call
 and is not held by this list.
+
+A key's two surfaces, the models and the MCP servers, are chosen on their
+own (ifitscolorful on X): **No model** at the top of the key's models menu,
+or `magpie gateway-key models <id> none`, makes a key for MCP servers only,
+and **No MCP server** (`gateway-key mcp <id> none`) one for models only. A
+key with neither choice, as every key made before, has both. The gateway
+refuses a key for MCP servers only every route that uses a model or tells
+of them, by the route the request is sent to before anything is read or
+sent upstream (`keySurfaceGuard`): chat completions, responses (its
+WebSocket too), messages and count_tokens, embeddings, rerank, images,
+audio, video, realtime, `/v1/decisions` and `/v1/systemone`, Gemini's,
+Ollama's and Codex's routes, a vendor's own API, the chat page, an
+artifact page's model, speech, dictation and send-to-agent calls, every
+model list, the quotas, the accounts and routing behind them. The answer
+is a 403 with `gateway_key_mcp_only`. A key for models only is refused
+every MCP route the same way, with `gateway_key_no_mcp`: the hub,
+`/mcp/<name>`, `/mcp/run/<name>`, magpie's own servers,
+`/v1/magpie/mcp` and an artifact page's MCP calls (before, it reached them and was given no tool). A key
+issued under either is held to the same. From another computer, a key for
+MCP servers only is given the Library's servers that run as programs on
+this computer, as a key with every model is: its MCP list, not a model
+limit, is what holds it, so hold it to the servers it needs. magpie's own
+servers that ask a model (`magpie-vision`, `magpie-image`) still work for
+it, with the model magpie is set to use for them; leave them out of its
+MCP list to keep it off them.
 
 A gateway key can also be held to some **accounts** (#905): the accounts
 and keys its requests may use, picked in the same menu right after their
@@ -1156,6 +1189,12 @@ the `ark-beta-systemone-api: true` header magpie adds on Ark's host, and its
 one decision model `doubao-seed-2-1-lite-260915`. The Coding and Agent
 Plans' paths don't serve it, so it bills as pay as you go.
 
+A Google Gemini provider with an AI Studio key (the `google` preset) decides
+with `google/gemini-decision-1` on Google's Decisions API, on the same keys.
+`/v1/systemone` sends it the state, the questions, and `images` and `audio`,
+each a list of data: URLs or URLs. A decision model that can't take audio
+is refused a request with audio, with a 400 that says so.
+
 Qwen Cloud (qwencloud.com), Alibaba's international Qwen platform, has keys
 of its own, made at home.qwencloud.com. Its pay as you go is `qwencloud`,
 at `{region}.maas.qwencloudapi.com` in six regions (`ap-southeast-1`, the
@@ -1319,14 +1358,20 @@ credentials are read when a request is signed.
 Each location serves models of its own, and Vertex AI has no list to ask which,
 so magpie gives each location the models it answered with on 2026-10-06
 (and Gemini 4: `gemini-4-argon` since 2026-10-13, `gemini-4-carbon` since
-2026-11-10 and `gemini-4-hydrogen` since 2026-11-12, at `global`, `us` and
-`eu`):
+2026-11-10, `gemini-4-hydrogen` since 2026-11-12 and `gemini-4-neon` since
+2026-11-18, at `global`, `us` and `eu`):
 
 | Location | Models |
 | --- | --- |
-| `global` | `gemini-3.8-flash`, `gemini-3.7-flash`, `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-4-carbon`, `gemini-4-hydrogen`, `gemini-4-argon`, `gemini-3.1-pro-preview`, `gemini-3.1-pro-preview-customtools`, `gemini-3.1-flash-lite`, `gemini-3-flash-preview`, `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite`, `deepseek-ai/deepseek-v4.1-flash-maas`, `zai-org/glm-5.2-maas`, `openai/gpt-oss-120b-maas`, `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5`, `claude-fable-5-2`, `claude-fable-5-1` |
-| `us`, `eu` | `gemini-3.8-flash`, `gemini-3.7-flash`, `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-4-carbon`, `gemini-4-hydrogen`, `gemini-4-argon`, `gemini-3.1-flash-lite` |
+| `global` | `gemini-3.8-flash`, `gemini-3.7-flash`, `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-4-neon`, `gemini-4-carbon`, `gemini-4-hydrogen`, `gemini-4-argon`, `gemini-3.1-pro-preview`, `gemini-3.1-pro-preview-customtools`, `gemini-3.1-flash-lite`, `gemini-3-flash-preview`, `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite`, `deepseek-ai/deepseek-v4.1-flash-maas`, `zai-org/glm-5.2-maas`, `openai/gpt-oss-120b-maas`, `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5`, `claude-fable-5-2`, `claude-fable-5-1` |
+| `us`, `eu` | `gemini-3.8-flash`, `gemini-3.7-flash`, `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-4-neon`, `gemini-4-carbon`, `gemini-4-hydrogen`, `gemini-4-argon`, `gemini-3.1-flash-lite` |
 | A region | `gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite` |
+
+A Gemini 4 or later model Google releases after these joins `global`, `us`
+and `eu` (and express mode) once [models.dev](https://models.dev)'s
+`google-vertex` entry lists it, ahead of the Gemini 4 models above, with no
+magpie update: magpie's catalog syncs from models.dev. A preview or a cyber
+model, which Google gives on its allowlist, is typed in.
 
 A region that serves one more, as asia-northeast1 serves `gemini-3.5-flash`,
 has it typed in with the rest you want:
@@ -1521,8 +1566,14 @@ A plugin can add a web search API to Settings › Models › Web search with a
 `search` hook (magpie's own; OpenCode ignores it). It is listed after
 Tavily, Brave and the rest under its own name, and added, keyed, switched
 off, reordered and removed like them (`magpie search add <plugin>:<id> <key>`
-on the command line). magpie keeps its keys (several, tried in turn, a refused
-one resting), its order and its place in the request log, masks the query
+on the command line, where the plugin's name or the id alone will do when it
+names one API; an empty `magpie search` lists the plugins' APIs). An API
+that signs in to the plugin's own provider (agy-cli's) is added by itself
+when you sign in to that provider and no search API was ever set up; one you
+remove stays removed. A list that has the withdrawn Antigravity plugin's
+search gets agy-cli's in front of it, once, while you are signed in to
+agy-cli. magpie keeps its keys (several, tried in turn, a refused one
+resting), its order and its place in the request log, masks the query
 as it does for every search API, and asks the plugin only while the
 plugin is on and the Web search plugin is.
 
@@ -2332,6 +2383,13 @@ each of these groups ordered by the share used.
   is. Each member's own accounts go as its provider routes them, and the
   Routing page says an account went after those known only of one
   weighed against a known account of the same member.
+- **Before expiry, one by one** (`pace-drain`): picks the account as Use
+  before expiry does, the highest pace first, and then stays on it, as
+  Until used up does, until it is used up (100%), refused for its quota or
+  credit, or fails; then it picks again by pace. A pick isn't left for
+  another whose pace has risen since, nor taken back by one that renews;
+  so each account's allowance is used up in turn, the one that would lose
+  the most at its reset first.
 - **In turn**: each turn of a conversation goes to the next account. A new
   conversation goes to the account the fewest other conversations of the
   last 30 minutes are on.
@@ -2526,6 +2584,31 @@ Claude Code, so no turn runs through Claude Code's SDK mode, which
 spends more of the allowance than Claude Code used on its own (myduso on
 Discord). Their usage is still read and shown.
 
+*Only switch agy's sign-in* under Providers › Antigravity CLI (or
+`magpie accounts switch-only agy-cli on`) does the same for agy (#1908):
+magpie serves no request on those accounts, and using one signs agy in
+to it where agy keeps its own sign-in (the keychain on macOS, Credential
+Manager on Windows, the Secret Service or agy's token file on Linux).
+The Antigravity app (2.x) reads the same sign-in, so it moves with agy.
+The rows of agy and the Antigravity app on Agents then show the account
+and switch it, as Claude Code's does. magpie renews the account with
+Google first and keeps a copy of what agy had in `agy-keyring-backup.json`
+in magpie's folder. Quit agy and the Antigravity app first: one still
+running keeps the account it started on and writes it back over the
+switch, so magpie refuses, naming what is running, and changes nothing.
+agy started with a Gemini API key or Vertex AI in its environment isn't
+switched. The warm-up sends nothing on these accounts.
+
+Switching is by hand unless you turn on *Switch agy's account
+automatically*, shown under the tick once it is on (or `magpie accounts
+auto-switch agy-cli on`). Then, when the account agy is on has used its
+allowance, the whole account or one of its pools of models (Gemini,
+Claude & GPT), magpie signs agy in to the next account that is on and
+has room there, once agy and the app have quit; till then it waits and
+looks again every ten seconds, and a line under the switch says which
+account is used up and which agy goes to. Unticking
+*Only switch agy's sign-in* turns it off too.
+
 **Switch accounts only.** To use magpie only to switch Claude Code (or
 Codex) between your accounts, leave it not connected on Agents and sign
 your accounts in under Providers › Claude Code. Its row on Agents then
@@ -2613,8 +2696,9 @@ serves Gemini CLI's sign-in to individual accounts, only to Gemini Code
 Assist Standard and Enterprise, which need a Google Cloud project named
 (`magpie accounts project gemini <email> <project-id>`, or
 `GOOGLE_CLOUD_PROJECT` in `~/.gemini/.env`). Google may suspend an
-Antigravity account it sees used outside Antigravity, so magpie asks before
-adding one; use an account you can afford to lose.
+Antigravity account it sees used from another agent, the built-in's and
+agy-cli's (Google's own agy) alike, so magpie asks before adding the first
+one; use an account you can afford to lose.
 
 Accounts signed in elsewhere can be imported from their files instead of
 signed in again: *Import accounts from a file…* under a subscription's
@@ -2827,8 +2911,20 @@ provider, those whose vendor tells no quota included, by identifiers only:
 never the key), `kind` (`account` or `key`), `label`, `user`, `plan`, `on`
 and `pin`, `"<provider>/<id>"`. `?provider=<id>` lists one provider's.
 `X-Magpie-Account: <pin>` (or the id alone) pins a request to that
-account or key. It is asked as `/v1/magpie/quotas` is: this machine, or
-another with a key of a gateway shared on the local network; a read-only
+account or key, one turned off (`on: false`) too: it is sent that request
+alone, routing still leaves it out, and its failure rests nothing. A
+gateway key held to models, accounts or limits is told 403 for one that
+is off. `?models=1` adds each one's `models`: the id of every
+model it can be asked for, its provider's whole list (not the first 24
+agents are offered of a provider with no picks), less a model the user
+keeps off that account and one on none of the provider's APIs. Each is
+asked as `<provider>/<id>`, offered to agents or not. `?models=full`
+gives the same models as `/v1/models`' rows instead of ids, built by the
+same code: `id` (`<provider>/<id>`), `display_name`, `reasoning_levels`,
+`context_window`, `max_output_tokens`, `modalities`, `pricing`,
+`magpie_label` and the rest. It is asked as
+`/v1/magpie/quotas` is: this machine, or another with a key of a gateway
+shared on the local network; a read-only
 key may read it, and a key held to a budget, models or accounts only when
 its owner lets it be told quotas, and then only of the accounts it may
 use.
@@ -3849,6 +3945,8 @@ magpie only sees the container's own address (Docker's 172.17.x), so set
 `-e MAGPIE_PUBLIC_URL=http://<the host's or NAS's address>:3425` (the port
 published on the host) for the address it shows and prints to be the one
 other machines use; behind a reverse proxy, set it to that external base URL
+as the browser opens it, `https://<name>[:<port>][/<path>]` (artifacts'
+links and the page's printed link keep its scheme, port and path, #8014),
 and follow the [authentication requirements above](#connecting-anything-else),
 especially when the proxy reaches magpie over loopback.
 Other containers on the same host reach the gateway at the host's Docker
@@ -4052,6 +4150,7 @@ application:
     - /backend-api/codex
     - /alpha/search
     - /mcp
+    - /v0/management
     - /me
     - /deepseek-chat
     - /join
@@ -4176,6 +4275,7 @@ magpie settings set noBird on   # checked and saved as the window saves it
 magpie settings set redactWords acme,globex
 magpie settings reset theme     # back to its default
 magpie settings set dayStart 4   # a day starts at 4:00 (0 to 6): the Usage page and daily and monthly key caps cut days there; the Sessions page does not yet
+magpie settings set timeZone Asia/Shanghai   # this magpie's days and times in that zone, not the computer's: Usage, Sessions, the TUI and CLI, key caps, the menu bar, quota alerts, and every time the window shows; reset follows the system
 
 magpie quota                    # what is left of every subscription, plan and key balance
 magpie quota refresh codex      # read Codex's cards again now (once per 30s)
@@ -4767,6 +4867,15 @@ and models to look after first, by magpie's own ids only:
   `~/.config/magpie/plugin-likes.json`. The code is
   [internal/stats/plugins.go](../internal/stats/plugins.go) and
   [site/pluginstats.js](../site/pluginstats.js).
+- to usemagpie.ai too, which of the routing groups shared there were
+  imported here from a link and are still here, by their share ids only
+  (`POST /api/groups/report`, at most 50), with the same id, so the
+  gallery can say how many use each (the ids that reported it in 7 days).
+  A group of the user's own, one imported from text, and a group's name or
+  members here never go; a computer that never imported one sends nothing.
+  A like on a shared group goes there too. The code is
+  [internal/groupshare](../internal/groupshare/groupshare.go) and
+  [site/groups.js](../site/groups.js).
 
 No names, base URLs, accounts, keys, prompts or usage go. Turn that part off
 in Settings → Privacy → Share the agents, providers, models and plugins I use; the

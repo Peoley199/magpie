@@ -19,6 +19,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/yetone/magpie/internal/appdir"
 	"github.com/yetone/magpie/internal/iconproxy"
@@ -104,6 +106,7 @@ var featured = []MarketServer{
 	artifactsServer(),
 	evermeServer(),
 	nowledgeServer(),
+	hindsightServer(),
 	remoteServer("context7", "Context7", "Upstash", gh("upstash"), "https://mcp.context7.com/mcp",
 		"Up-to-date documentation and code examples for any library, straight into the prompt.", false,
 		Input{Key: "CONTEXT7_API_KEY", Where: "header", Label: "API key", Description: "Optional — raises the rate limit. From context7.com/dashboard", Secret: true, format: "{}"}),
@@ -142,6 +145,8 @@ var featured = []MarketServer{
 		"Search, read and write pages and databases in your Notion workspace.", true),
 	remoteServer("atlassian", "Atlassian", "Atlassian", gh("atlassian"), "https://mcp.atlassian.com/v1/mcp",
 		"Jira issues and Confluence pages from Atlassian Cloud.", true),
+	figmaServer(),
+	figmaDesktopServer(),
 	remoteServer("supabase", "Supabase", "Supabase", gh("supabase"), "https://mcp.supabase.com/mcp",
 		"Manage Supabase projects: tables, SQL, migrations, logs and edge functions.", true),
 	remoteServer("stripe", "Stripe", "Stripe", gh("stripe"), "https://mcp.stripe.com",
@@ -300,6 +305,44 @@ func nowledgeServer() MarketServer {
 		Input{Key: "Authorization", Where: "header", Label: "API key", Description: "Optional — only for a Mem reached over Access Anywhere", Placeholder: "nmem_…", Secret: true, format: "Bearer {}"})
 }
 
+// hindsightServer is Hindsight's own MCP endpoint (vectorize-io/hindsight,
+// hindsight-api's MCPMiddleware): Streamable HTTP at /mcp on its API port,
+// 8888 in its Docker image. On /mcp the bank comes from the X-Bank-Id
+// header, Hindsight's default bank when there is none; a key is asked for
+// only when its tenant extension is set, as Authorization: Bearer. Its
+// own LLM is any OpenAI-compatible endpoint (HINDSIGHT_API_LLM_BASE_URL),
+// so it can be magpie's gateway (zysicyj on X).
+func hindsightServer() MarketServer {
+	return remoteServer("hindsight", "Hindsight", "Vectorize", gh("vectorize-io"), "http://localhost:8888/mcp",
+		"Hindsight's memory banks, as a second memory beside Magpie Memory. Hindsight must be running (port 8888). Its own LLM can be Magpie's gateway: point HINDSIGHT_API_LLM_BASE_URL at it.", false,
+		Input{Key: "X-Bank-Id", Where: "header", Label: "Bank ID", Description: "Empty uses Hindsight's default bank", Placeholder: "default"},
+		Input{Key: "Authorization", Where: "header", Label: "API key", Description: "Only when Hindsight asks for one (HINDSIGHT_API_TENANT_API_KEY)", Secret: true, format: "Bearer {}"})
+}
+
+// figmaServer is Figma's remote MCP server. Its sign-in admits only the
+// clients Figma lists (dynamic client registration answers any other 403,
+// #1619), so magpie can't sign in to it and neither can the MCP router:
+// it is added direct (Server.Hub), and each agent given it signs in there
+// itself. The registry lists it as com.figma.mcp/mcp, which named it
+// "mcp" (shortName).
+func figmaServer() MarketServer {
+	m := remoteServer("figma", "Figma", "Figma", gh("figma"), "https://mcp.figma.com/mcp",
+		"Design context, variables and screenshots from Figma files. Figma admits only the apps it lists (Claude Code, Codex, Cursor…), so each agent signs in itself.", true)
+	m.server.Hub = HubDirect
+	return m
+}
+
+// figmaDesktopServer is the MCP server Figma's desktop app runs on this
+// computer (developers.figma.com/docs/figma-mcp-server/local-server-installation):
+// Streamable HTTP at 127.0.0.1:3845/mcp, no sign-in, any client. It
+// listens on loopback alone, so the router, which reaches it from this
+// computer, serves it to agents in WSL and on the LAN too (RockyShowlle
+// on X).
+func figmaDesktopServer() MarketServer {
+	return remoteServer("figma-desktop", "Figma Desktop", "Figma", gh("figma"), "http://127.0.0.1:3845/mcp",
+		"Figma's desktop app's own MCP server, open to any agent. Figma must be open, with Dev Mode's \"Enable desktop MCP server\" on.", false)
+}
+
 // selfCommand is the server's command and env for this magpie: its binary
 // by full path, and the gateway's address when it isn't the default one.
 func selfCommand(s *Server) {
@@ -337,6 +380,9 @@ var homepages = map[string]string{
 	"microsoft-learn": "https://github.com/MicrosoftDocs/mcp",
 	"huggingface":     "https://huggingface.co/settings/mcp",
 	"nowledge-mem":    "https://mem.nowledge.co/docs/integrations",
+	"hindsight":       "https://hindsight.vectorize.io/developer/mcp-server",
+	"figma":           "https://developers.figma.com/docs/figma-mcp-server/remote-server-installation/",
+	"figma-desktop":   "https://developers.figma.com/docs/figma-mcp-server/local-server-installation/",
 }
 
 func init() {
@@ -394,10 +440,10 @@ var seenServers = struct {
 	m map[string]MarketServer
 }{m: map[string]MarketServer{}}
 
-// MarketServers is what the market shows for a search: the featured servers
-// that match it, then the registry's, then the popular ones that do; with no
-// search, the featured and every popular one. A search that is an address —
-// a repository, a page, an endpoint, a package — finds the ones at it.
+// MarketServers is what the market shows for a search: with no search, the
+// featured and every popular server in their curated order. A word search
+// ranks all matching sources together. A search that is an address — a
+// repository, a page, an endpoint, a package — finds the ones at it.
 func MarketServers(q string) ([]MarketServer, error) {
 	raw := strings.TrimSpace(q)
 	q = strings.ToLower(raw)
@@ -421,29 +467,35 @@ func MarketServers(q string) ([]MarketServer, error) {
 					m.Match = true
 					got = append(got, m)
 				}
-			case q == "" || strings.Contains(strings.ToLower(m.Title+" "+m.ID+" "+m.Publisher+" "+m.Description+" "+packageOf(&m.server)), q):
+			case q == "":
 				got = append(got, m)
 			}
 		}
 		return got
 	}
-	add(pick(featured))
 	var err error
 	switch {
 	case q == "":
+		add(featured)
 		add(popularServers())
 	case addr != "":
+		add(pick(featured))
 		add(pick(popularServers()))
 		var found []MarketServer
 		found, err = searchAt(raw, addr)
 		add(found)
 	default:
-		// the registry's, ranked by name first; then the popular ones
-		// whose words have it
 		found, ferr := searchWords(q)
 		err = ferr
-		add(found)
-		add(pick(popularServers()))
+		var ranked []scored
+		for _, list := range [][]MarketServer{featured, found, popularServers()} {
+			for _, m := range list {
+				if score, ok := marketScore(m, q); ok {
+					ranked = append(ranked, scored{m: m, score: score})
+				}
+			}
+		}
+		out = best(ranked)
 	}
 	if out == nil {
 		out = []MarketServer{}
@@ -454,6 +506,96 @@ func MarketServers(q string) ([]MarketServer, error) {
 		}
 	}
 	return out, err
+}
+
+// marketScore ranks a word search independently of where a server came from.
+// Names and packages are much stronger signals than a description mention.
+func marketScore(m MarketServer, q string) (int, bool) {
+	score := 0
+	for _, field := range []string{m.Name, m.Title, m.ID, packageOf(&m.server), m.Publisher} {
+		score = max(score, marketFieldScore(field, q))
+	}
+	if descriptionScore := marketDescriptionScore(m.Description, q); descriptionScore > score {
+		score = descriptionScore
+	}
+	if score == 0 {
+		return 0, false
+	}
+	if m.Featured {
+		score++
+	}
+	return score, true
+}
+
+func marketFieldScore(field, q string) int {
+	field = strings.ToLower(field)
+	switch {
+	case field == q:
+		return 10000
+	case strings.HasPrefix(field, q):
+		return 8000
+	case marketWordMatch(field, q):
+		return 7000
+	case strings.Contains(field, q):
+		return 6000
+	default:
+		return 0
+	}
+}
+
+func marketDescriptionScore(description, q string) int {
+	if marketWordMatch(description, q) {
+		return 1000
+	}
+	// inside a word: only a query long enough not to be part of many
+	// (rea is in read, real, area); in a script written without spaces
+	// (Chinese) a word has no edges to look for
+	if (len([]rune(q)) > 3 || !ascii(q)) && strings.Contains(strings.ToLower(description), q) {
+		return 500
+	}
+	return 0
+}
+
+func marketWordMatch(text, q string) bool {
+	text = strings.ToLower(text)
+	for start := 0; ; {
+		i := strings.Index(text[start:], q)
+		if i < 0 {
+			return false
+		}
+		i += start
+		before := i == 0 || !marketWordBefore(text, i)
+		after := i+len(q) == len(text) || !marketWordAt(text, i+len(q))
+		if before && after {
+			return true
+		}
+		start = i + len(q)
+	}
+}
+
+func marketWordBefore(text string, byteIndex int) bool {
+	if byteIndex <= 0 || byteIndex > len(text) {
+		return false
+	}
+	r, _ := utf8.DecodeLastRuneInString(text[:byteIndex])
+	return unicode.IsLetter(r) || unicode.IsNumber(r)
+}
+
+func marketWordAt(text string, byteIndex int) bool {
+	if byteIndex < 0 || byteIndex >= len(text) {
+		return false
+	}
+	r, _ := utf8.DecodeRuneInString(text[byteIndex:])
+	return unicode.IsLetter(r) || unicode.IsNumber(r)
+}
+
+func ascii(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= utf8.RuneSelf {
+			return false
+		}
+	}
+	return true
 }
 
 // serverKey is what a server is, whatever it's called: its URL, or the
@@ -629,6 +771,30 @@ func offer(list []scored) []MarketServer {
 			break
 		}
 		seenServers.m[s.m.ID] = s.m
+		out = append(out, s.m)
+	}
+	return out
+}
+
+// best is a word search's servers from every source, each once at its best
+// score, best first; among equals, in the order the sources gave them
+// (featured, the registry's by its rank, popular). None is dropped: a
+// search for a word lists everything that has it, as before (#7891).
+func best(list []scored) []MarketServer {
+	at := map[string]int{}
+	var unique []scored
+	for _, s := range list {
+		k := serverKey(&s.m.server)
+		if i, ok := at[k]; ok {
+			unique[i].score = max(unique[i].score, s.score)
+			continue
+		}
+		at[k] = len(unique)
+		unique = append(unique, s)
+	}
+	sort.SliceStable(unique, func(i, j int) bool { return unique[i].score > unique[j].score })
+	out := make([]MarketServer, 0, len(unique))
+	for _, s := range unique {
 		out = append(out, s.m)
 	}
 	return out
@@ -868,7 +1034,7 @@ func InstallServer(id string, values map[string]string, agents []string) (*Resul
 	if err := s.check(); err != nil {
 		return nil, err
 	}
-	return change(func(l *Library) error {
+	return changeMCP(func(l *Library) error {
 		if have := l.haveServer(&s); have != "" {
 			return fmt.Errorf("the library has it already, as %s", have)
 		}
@@ -983,7 +1149,10 @@ type MarketSkill struct {
 // many features that an AI could do the setting up); magpie-quota reads
 // what magpie quota tells (ttmouse on X); magpie-sessions searches and
 // reads every agent's sessions through magpie sessions search and show
-// (yansheng1003 on X).
+// (yansheng1003 on X); magpie-api teaches an agent the gateway's own HTTP
+// API, /v1/magpie/quotas, /v1/models and /v1/magpie/route, for one that
+// orchestrates work across models (thedavidweng on X; its copy in
+// internal/gateway/testdata is held to the handlers).
 var featuredSkills = []MarketSkill{{
 	Source: "magpie-community/plugins", SkillID: "magpie-setup", Name: "magpie-setup", Official: true, Featured: true,
 	Description: "Set magpie up as you ask, through its own commands: add keys and subscriptions, point agents at models, build routing groups with fallbacks and time-of-day rules, give devices gateway keys with budgets, and share MCP servers and instructions with every agent.",
@@ -993,6 +1162,9 @@ var featuredSkills = []MarketSkill{{
 }, {
 	Source: "magpie-community/plugins", SkillID: "magpie-sessions", Name: "magpie-sessions", Official: true, Featured: true,
 	Description: "Search what was said in every coding agent's sessions on this computer through magpie, Claude Code's, Codex's and the others', and read the session a hit is in: find an earlier conversation, decision or fix.",
+}, {
+	Source: "magpie-community/plugins", SkillID: "magpie-api", Name: "magpie-api", Official: true, Featured: true,
+	Description: "Read magpie's own HTTP API from an agent: what is left of every subscription, coding plan and key balance, the models available now, and which model a routing group picked for a session and what it fell back from. For an agent orchestrating work across models.",
 }}
 
 type skillsShEntry struct {

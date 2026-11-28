@@ -339,6 +339,194 @@ func TestNowledgeMemMagpieOnAServer(t *testing.T) {
 	}
 }
 
+// Alex on Discord (11-25): Mem connected here, then the magpie on their
+// server imported over Mem's own magpie provider. Disconnect took no
+// effect, or removed the server's provider, as it wasn't there before
+// magpie. Now it forgets what magpie set and leaves the server's provider
+// as the user has it, Mem's AI on it, and the row is no longer connected;
+// with Mem not running too. And it is never read as this magpie's to
+// begin with (11-27: on a model this magpie serves too, deepseek/pro, it
+// still read as connected until Disconnect, which Alex never pressed):
+// the server's address doesn't answer as this magpie, on a name or this
+// network's address alike, so Mem was switched off magpie. 11-28 (still
+// on v0.1.4989): the row stayed among those connected, as changed outside
+// magpie, and Disconnect did nothing to it. As the Agents page is drawn
+// (Follow) what magpie remembers setting goes, and so it does on a
+// Disconnect without the page drawn again.
+func TestNowledgeMemServerImportedOver(t *testing.T) {
+	for _, c := range []struct {
+		name, server, model string
+		down, drawn         bool
+	}{
+		{"a model of this magpie's", "https://magpie.example.com/v1", "deepseek/pro", false, true},
+		{"a model of this magpie's, page not drawn again", "https://magpie.example.com/v1", "deepseek/pro", false, false},
+		{"a model of this magpie's, Mem not running", "https://magpie.example.com/v1", "deepseek/pro", true, true},
+		{"a model of this magpie's, Mem not running, page not drawn again", "https://magpie.example.com/v1", "deepseek/pro", true, false},
+		{"a model of the server's alone", "https://magpie.example.com/v1", "cloudonly/m1", false, true},
+		{"a magpie on this network", "http://192.168.1.20:3425/v1", "deepseek/pro", false, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			home, dir := memTestHome(t)
+			f := serveFakeMem(t, dir)
+			a := nowledgeMem(home)
+			if _, err := a.ConnectHow(); err != nil {
+				t.Fatal(err)
+			}
+			if !a.Wired() {
+				t.Fatal("not connected")
+			}
+			f.add("magpie", "magpie", c.model, c.server, 0.3)
+			own := strings.TrimSuffix(strings.SplitN(c.server, "://", 2)[1], "/v1") + "/" + c.model
+			// never the address told changed, whose Reconnect wrote this
+			// magpie over the server's
+			if d := a.Drift(); a.Wired() || d != nil && d.Kind != "replaced" {
+				t.Errorf("the server's magpie read as this one: wired %v, %+v", a.Wired(), d)
+			}
+			if got := a.Field("model").Get(); got != own {
+				t.Errorf("model read as %q", got)
+			}
+			if msg := a.Check(); msg != "" {
+				t.Errorf("Check: %s", msg)
+			}
+			if c.down {
+				memLive = func(string) *memClient { return nil }
+			}
+			if c.drawn {
+				if err := a.Follow(); err != nil {
+					t.Fatal(err)
+				}
+				if a.Wired() || a.Drift() != nil {
+					t.Errorf("shown connected: wired %v, %+v", a.Wired(), a.Drift())
+				}
+				if unstashPeek("nowledge-mem.prev:"+dir) != "" || appliedOf("nowledge-mem").Fields != nil {
+					t.Error("what magpie set Mem up with is kept")
+				}
+			}
+			f.mu.Lock()
+			f.ops = nil
+			f.mu.Unlock()
+			if err := a.Disconnect(); err != nil {
+				t.Fatal(err)
+			}
+			d := f.read()
+			if p := d.Providers["magpie"]; p == nil || p.APIBase != c.server || p.Model != c.model || d.Active != "magpie" || !d.Enabled {
+				t.Errorf("the server's provider changed: %+v %+v", d, p)
+			}
+			f.mu.Lock()
+			ops := f.ops
+			f.mu.Unlock()
+			for _, op := range ops {
+				if strings.HasPrefix(op, "POST ") {
+					t.Errorf("stepping out wrote to Mem: %v", ops)
+					break
+				}
+			}
+			if a.Wired() || a.Drift() != nil {
+				t.Errorf("still connected after Disconnect: wired %v, %+v", a.Wired(), a.Drift())
+			}
+			if got := a.Field("model").Get(); got != own {
+				t.Errorf("model read as %q after", got)
+			}
+		})
+	}
+}
+
+// Alex on Discord (11-28): the first Agents page after a start read Mem
+// as connected, as the server's address hadn't answered yet, so the
+// switch stayed on, and Disconnect then found nothing of magpie's and
+// did nothing. The page's first draw waits for that answer.
+func TestNowledgeMemServerImportedOverFirstRead(t *testing.T) {
+	home, dir := memTestHome(t)
+	f := serveFakeMem(t, dir)
+	a := nowledgeMem(home)
+	if _, err := a.ConnectHow(); err != nil {
+		t.Fatal(err)
+	}
+	f.add("magpie", "magpie", "deepseek/pro", "https://magpie.example.com/v1", 0.3)
+	probed := coldMagpie(t, map[string]bool{})
+	if err := a.Follow(); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.Field("model").Get(); got != "magpie.example.com/deepseek/pro" || a.Wired() || a.Drift() != nil {
+		t.Errorf("first read: %q wired %v %+v", got, a.Wired(), a.Drift())
+	}
+	if p := probed(); len(p) != 1 || p[0] != "https://magpie.example.com" {
+		t.Errorf("probed %v", p)
+	}
+}
+
+// A provider of another name the user added at the server's magpie (an
+// OpenAI-compatible one), on a model this magpie serves too, is the
+// server's: not connected here, picked again as it reads it is the same
+// model, and Disconnect leaves it be.
+func TestNowledgeMemOtherProviderAtAServer(t *testing.T) {
+	home, dir := memTestHome(t)
+	f := serveFakeMem(t, dir)
+	f.add("cloud", "openai_compatible", "deepseek/pro", "https://magpie.example.com/v1", 0.3)
+	a := nowledgeMem(home)
+	fm := a.Field("model")
+	if got := fm.Get(); got != "magpie.example.com/deepseek/pro" || a.Wired() || a.Drift() != nil {
+		t.Errorf("read as %q, wired %v %+v", got, a.Wired(), a.Drift())
+	}
+	if err := fm.Set(fm.Get()); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.ops = nil
+	f.mu.Unlock()
+	if err := a.Disconnect(); err != nil {
+		t.Fatal(err)
+	}
+	d := f.read()
+	if p := d.Providers["cloud"]; p == nil || p.Model != "deepseek/pro" || p.APIBase != "https://magpie.example.com/v1" || d.Active != "cloud" || !d.Enabled || d.Providers["magpie"] != nil {
+		t.Errorf("the user's provider changed: %+v %+v", d, p)
+	}
+	f.mu.Lock()
+	ops := f.ops
+	f.mu.Unlock()
+	for _, op := range ops {
+		if strings.HasPrefix(op, "POST ") {
+			t.Errorf("Disconnect wrote to Mem: %v", ops)
+			break
+		}
+	}
+	// the same provider at this magpie's gateway is one of this magpie's
+	// models still, as before
+	d.Providers["cloud"].APIBase = gatewayV1()
+	f.write(d)
+	if got := fm.Get(); got != "deepseek/pro" {
+		t.Errorf("at the gateway: %q", got)
+	}
+}
+
+// Mem connected here, then its magpie provider pointed at a proxy in
+// front of this gateway (#1985), which answers as this magpie: still
+// connected, and stepping out puts back what Mem had.
+func TestNowledgeMemBehindAProxyOfThisMagpie(t *testing.T) {
+	const proxy = "https://ai.corp.example/magpie"
+	home, dir := memTestHome(t)
+	f := serveFakeMem(t, dir)
+	f.add("openai", "openai", "gpt-5", "", 0.5)
+	a := nowledgeMem(home)
+	if err := a.Field("model").Set("magpie/deepseek/pro"); err != nil {
+		t.Fatal(err)
+	}
+	fakeMagpieAt(t, map[string]bool{proxy: true})
+	d := f.read()
+	d.Providers["magpie"].APIBase = proxy + "/v1"
+	f.write(d)
+	if got := a.Field("model").Get(); got != "magpie/deepseek/pro" || !a.Wired() || a.Drift() != nil {
+		t.Errorf("behind the proxy: %q wired %v %+v", got, a.Wired(), a.Drift())
+	}
+	if err := a.Disconnect(); err != nil {
+		t.Fatal(err)
+	}
+	d = f.read()
+	if d.Providers["magpie"] != nil || d.Active != "openai" || a.Wired() {
+		t.Errorf("after disconnect: %+v", d)
+	}
+}
+
 // A Mem whose AI was off, with no provider at all, is left that way.
 func TestNowledgeMemFromNothing(t *testing.T) {
 	home, dir := memTestHome(t)

@@ -171,6 +171,25 @@ func searchFound(tools []rTool) string {
 	return "These tools are now available to call: " + strings.Join(names, ", ")
 }
 
+// foundNames are the names the tools a search found are offered under, a
+// namespace's flat (flatName), to say where they load (Part.Loads).
+func foundNames(tools []rTool) []string {
+	var names []string
+	for _, t := range tools {
+		switch t.Type {
+		case "function", "custom":
+			names = append(names, t.Name)
+		case "namespace":
+			for _, nt := range t.Tools {
+				if nt.Type == "function" || nt.Type == "custom" {
+					names = append(names, flatName(t.Name, nt.Name))
+				}
+			}
+		}
+	}
+	return names
+}
+
 // flatName is the name a namespaced tool is offered to a model under,
 // namespace__name, the same a Grok subscription is offered it under.
 // unsealed is a tool's parameters without the "encrypted" marks Codex puts
@@ -476,7 +495,10 @@ func readResponsesFor(body []byte, facts, keepInstructions bool) (*Request, erro
 				r.Messages = append(r.Messages, Message{Role: "assistant", Parts: []Part{{Kind: ToolCall, ID: it.CallID, Name: toolSearch, Args: parseArgs(string(it.Arguments))}}})
 			case it.Type == "tool_search_output":
 				found = append(found, it.Tools...)
-				r.Messages = append(r.Messages, Message{Role: "user", Parts: []Part{{Kind: ToolResult, CallID: it.CallID, Text: searchFound(it.Tools)}}})
+				// the tools it found, loaded here: where the upstream takes
+				// them in place (Request.LoadedInPlace) they go after this
+				// result, and the tools and earlier items keep the prefix
+				r.Messages = append(r.Messages, Message{Role: "user", Parts: []Part{{Kind: ToolResult, CallID: it.CallID, Text: searchFound(it.Tools), Loads: foundNames(it.Tools)}}})
 			case (it.Type == "function_call_output" || it.Type == "custom_tool_call_output") && facts:
 				r.Messages = append(r.Messages, Message{Role: "user", Parts: []Part{{Kind: ToolResult, CallID: it.CallID}}})
 			case it.Type == "function_call_output" || it.Type == "custom_tool_call_output":
@@ -567,11 +589,14 @@ func readResponsesFor(body []byte, facts, keepInstructions bool) (*Request, erro
 				r.WebAccess = t.ExternalWebAccess
 			}
 		}
+		// a tool a search found is loaded where its result is
+		// (Part.Loads), not from the start
+		searched := i >= sent
 		switch t.Type {
 		case "function":
-			offer(i, Tool{Name: t.Name, Description: t.Description, Schema: unsealed(t.Parameters), Strict: t.Strict != nil && *t.Strict}, nsTool{})
+			offer(i, Tool{Name: t.Name, Description: t.Description, Schema: unsealed(t.Parameters), Strict: t.Strict != nil && *t.Strict, Deferred: searched}, nsTool{})
 		case "custom":
-			offer(i, Tool{Name: t.Name, Description: customDescription(t), Schema: customSchema}, nsTool{Name: t.Name, Custom: true})
+			offer(i, Tool{Name: t.Name, Description: customDescription(t), Schema: customSchema, Deferred: searched}, nsTool{Name: t.Name, Custom: true})
 		case "namespace":
 			// offered flat, as few models know namespaces; a call is given
 			// its namespace back on the way out
@@ -579,9 +604,9 @@ func readResponsesFor(body []byte, facts, keepInstructions bool) (*Request, erro
 				flat := flatName(t.Name, nt.Name)
 				switch nt.Type {
 				case "function":
-					offer(i, Tool{Name: flat, Description: nt.Description, Schema: unsealed(nt.Parameters), Strict: nt.Strict != nil && *nt.Strict}, nsTool{Namespace: t.Name, Name: nt.Name})
+					offer(i, Tool{Name: flat, Description: nt.Description, Schema: unsealed(nt.Parameters), Strict: nt.Strict != nil && *nt.Strict, Deferred: searched}, nsTool{Namespace: t.Name, Name: nt.Name})
 				case "custom":
-					offer(i, Tool{Name: flat, Description: customDescription(nt), Schema: customSchema}, nsTool{Namespace: t.Name, Name: nt.Name, Custom: true})
+					offer(i, Tool{Name: flat, Description: customDescription(nt), Schema: customSchema, Deferred: searched}, nsTool{Namespace: t.Name, Name: nt.Name, Custom: true})
 				}
 			}
 		case toolSearch:
@@ -2054,7 +2079,10 @@ func (d *responsesDecoder) decode(data string, emit func(Event)) error {
 			if status == 0 {
 				status, said = fs, fsaid
 			}
-			emit(Event{Kind: KError, Text: cmp.Or(msg, streamErrorText(data)), Code: code, Status: status, Said: said})
+			if status == 0 {
+				status = namedEventStatus(data)
+			}
+			emit(Event{Kind: KError, Text: cmp.Or(msg, streamErrorText(data)), Code: code, Status: status, Said: said, Resets: saidResets(data, time.Now())})
 			return nil
 		}
 		// the reply ends: every call still waiting goes before its stop
@@ -2090,7 +2118,10 @@ func (d *responsesDecoder) decode(data string, emit func(Event)) error {
 		if status == 0 {
 			status, said = fs, fsaid
 		}
-		emit(Event{Kind: KError, Text: cmp.Or(msg, streamErrorText(data)), Code: code, Status: status, Said: said})
+		if status == 0 {
+			status = namedEventStatus(data)
+		}
+		emit(Event{Kind: KError, Text: cmp.Or(msg, streamErrorText(data)), Code: code, Status: status, Said: said, Resets: saidResets(data, time.Now())})
 	}
 	return nil
 }
@@ -2124,6 +2155,18 @@ func saidError(failed map[string]any, said json.RawMessage) {
 		if v := e.Get(k); v.Type == gjson.String && v.String() != "" {
 			failed[k] = v.String()
 		}
+	}
+}
+
+// resetsSaid puts on failed, an error event magpie writes, when the limit
+// that refused the request renews, as the upstream said it (Event.Resets,
+// in unix seconds, ChatGPT's resets_at): held before the reply began, the
+// event is what the rest is read from (resetsIn), and without it a Claude
+// Code turn on doubao-work's spent month rested a quarter of an hour
+// (aaron0x10 on X).
+func resetsSaid(failed map[string]any, t time.Time) {
+	if !t.IsZero() {
+		failed["resets_at"] = t.Unix()
 	}
 }
 
@@ -2494,6 +2537,7 @@ func (e *responsesEncoder) event(ev Event) {
 		}
 		failed := map[string]any{"code": code, "message": ev.Text}
 		saidError(failed, ev.Said)
+		resetsSaid(failed, ev.Resets)
 		e.send("response.failed", map[string]any{"response": e.response("failed", map[string]any{"error": failed})})
 	}
 	e.col.add(ev)
