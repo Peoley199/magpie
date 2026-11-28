@@ -1,9 +1,9 @@
 # Fork 同步与构建手册（Peoley199/magpie）
 
 本 fork 的上游是 `yetone/magpie`（remote 名 `upstream`），fork 自己的改动长期保留在上游之外。
-本文是 2026-10-30／10-31／11-01／11-05／11-06／11-07／11-11／11-12／11-16／11-22／11-25 几轮同步（7499ebb5→cd10dfbe 700 提交、
+本文是 2026-10-30／10-31／11-01／11-05／11-06／11-07／11-11／11-12／11-16／11-22／11-25／11-28 几轮同步（7499ebb5→cd10dfbe 700 提交、
 →cdf8151a 40、→ffa07395 4、→f7f2d75f 149、→380032cda 11、→854fc8161 237、→6abacd46c 827、
-→84ad780b6 110、→665b9aff1 180、→db0f2f20d 554、→2bb201162 288、→f9807c5e8 766、→8df7885d4 5、→700f4127e 541、→e6f4af3f9 133）
+→84ad780b6 110、→665b9aff1 180、→db0f2f20d 554、→2bb201162 288、→f9807c5e8 766、→8df7885d4 5、→700f4127e 541、→e6f4af3f9 133、→00bfddac0 406）
 沉淀的操作手册，配套两个脚本：
 
 - `scripts/fork-sync.sh` — 调查→方案→合并→验证→（推送）→构建，一条命令跑完；
@@ -441,6 +441,64 @@ Windows rename 缺陷，不是新回归。翻转也有两例：`TestRestartWaits
 新版本才接手。
 
 **推送**：`git push origin main` fast-forward（`eb43e7afc..22930db90`），
+默认 ssh 通道一次成功。
+
+### 11-28（v0.1.4777→v0.1.5022，**406 提交**；19 包 149 红，0 回归）
+
+**拉取**：HTTPS + 本机代理一次拉完（未触发 11-22 记的掐断；远端真实头先
+`git ls-remote upstream refs/heads/main` 核对为 `00bfddac0`）。`fork-sync.sh` 调查模式：
+upstream 领先 406、fork 领先 43，文件重叠 `docs/subsystems/gateway-routing.md`、
+`docs/subsystems/provider-plugins.md`、`internal/gateway/anthropic_shapes.go`、
+`internal/gateway/gateway.go`，指纹（`zcodeStartPlan`／`zcodeWorkDir`）上游侧仍然一个都没有。
+
+**合并**：无冲突，合并头 `1fda56925`。上游又改了 fork 拥有的 `anthropic_shapes.go`、
+`gateway.go` 与两份子系统文档，都自动合并成功。合并后逐项复核指纹：`zcodeWorkDir` 仍在
+`callerForms` 与 `turnForms` 的 `<system-reminder>` 作用域里（`workdir.go:73,88`），
+`zcodeStartPlan` 调用点仍在 `gateway.go:7194` 的 forwardOnce 里，
+`systemTextOf`／`withoutZCodeSystem` 都在（`anthropic_shapes.go:724,736,780`）。
+`go build ./...`、`gofmt -l .`（干净）、`go vet ./...`、fork 的网关测试全绿。
+
+**套件第一次没跑成**：起跑命令写成了
+`go test ... 2>&1 | tee /tmp/fork-suite.log | tail -n 0`，`tail -n 0` 提前退出、`tee` 随之
+退出，日志 0 字节而测试进程还在空转。终止后用 `> /tmp/fork-suite.log 2>&1` 直写重跑。
+教训：套件日志直写文件，别接一条会提前退出的管道。
+
+**回归判定**（与 11-25 同法，不跑 `fork-suite-compare.sh`）：92 个包 ok、19 个包 FAIL、
+149 个红测试（上轮 150）。19 个失败包里 18 个与上游**逐字节相同**
+（`git diff --quiet upstream/main..HEAD -- <pkg>`，fork 只改 `internal/gateway` 加
+docs/scripts）。`internal/gateway` 的 14 个红在**纯上游 `00bfddac0`** 树上逐一复现，
+测试集合（`diff` 为空）与签名完全一致：
+
+| 测试 | 签名 |
+| --- | --- |
+| `TestClaudeAsRootEnv` | `want [… "IS_SANDBOX=1"]`：断言 Linux 行为 |
+| `TestSweepBridgeProjectsTakesOnlyTheBridgesFolders` | `symlink …: A required privilege is not held by the client` |
+| `TestHandedOverGatewayFinishesItsStream` 等 5 个 handover | `file tcp 127.0.0.1:…: A device attached to the system is not functioning`（Windows loopback 文件句柄） |
+| `TestHubRootsOfACodexThread` | `called for {Roots:[] …}, want the turn's workspace`（`/work/repo` 在 Windows 不是绝对路径） |
+| `TestOpenAIProviderTurnsGoOverWebSocketByDefault`、`TestOpenAIProviderSocketOffNeverDials` | **真实请求到 api.openai.com**：`401 … Incorrect API key provided: sk-oai`——`Resolve` 的假上游在这两例里没生效，测试会触网，上游测试隔离缺陷 |
+| `TestRelay*` 4 个 socket | `200, a reply without its end: : keepalive`（固定等待；Windows 上 relay 的回复流不结束） |
+
+其余 18 个包的红全部落在与上游逐字节相同的代码里（symlink 权限 / WSL 未安装 / Keychain /
+`%AppData%` 未定义 / `git push exit status 0xc0000005` / 分配字节上限 / TempDir 文件锁 /
+Windows 路径断言等已知类）。本轮新面孔同样属已知类或上游自己的红：
+`TestHostRunsAsMagpieBun` 取回的 magpie-bun 1.4.2 报 `This version of %1 is not compatible
+with the version of Windows you're running`（可执行架构不匹配），
+`TestEveryFieldLabelHasTUIZh` 是上游自己的 zh 标签守卫（hermes 的 `profile:default` 缺中文），
+`TestLivePathNamedOnce` 是分配上限，`TestDimBusyKeepsLastRead` 是 TempDir 文件锁。
+结果：**0 回归**。
+
+**上游在套件期间又前进了 19 个提交**（`00bfddac0→71bb9c6fd`，v0.1.5022→v0.1.5035，
+含 `internal/gateway/gateway.go` 与 `docs/subsystems/gateway-routing.md`）。本轮按手册
+"推送与记录落在已测试的合并头"收尾：推送头是 `1fda56925`，这 19 个提交留给下一轮合并
+（`git merge-base` 之后仍只算增量，无需清理）。
+
+**构建与安装**：`v0.1.5022-44-g1fda56925`（113,612,288 字节，PE subsystem=2，
+资源版本 0.1.5022；比上轮小 4.0MB，来自上游把 goja 换成 moejs 及 protobuf/grpc 精简），
+应用正在跑，改名法装上 `D:\magpie`，旧版留档
+`.bak-v0.1.4777-44-g22930db90`。运行中的进程仍服务旧构建，要从托盘退出再启动，
+新版本才接手。
+
+**推送**：`git push origin main` fast-forward（`2945a9f5e..1fda56925`），
 默认 ssh 通道一次成功。
 
 ## 四、远端仓库的处理
